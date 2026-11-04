@@ -10,7 +10,7 @@ type t = {
   registration : registration;
 }
 
-let delegated_types = Hashtbl.create 32
+let delegated_types = ref []
 
 let bind element event handler =
   let key = "$$melhole:" ^ event in
@@ -22,10 +22,10 @@ let bind element event handler =
     | "mouseout" | "mouseover" | "mouseup" | "pointerdown" | "pointermove"
     | "pointerout" | "pointerover" | "pointerup" | "touchend" | "touchmove"
     | "touchstart" ->
-        (match Hashtbl.find_opt delegated_types event with
-        | Some () -> ()
+        (match List.find_opt (String.equal event) !delegated_types with
+        | Some _ -> ()
         | None ->
-            Hashtbl.add delegated_types event ();
+            delegated_types := event :: !delegated_types;
             Dom_api.add_document_listener Dom_api.document event (fun native ->
                 let rec bubble node =
                   Option.iter (fun handle -> handle native)

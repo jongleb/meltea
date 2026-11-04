@@ -21,18 +21,32 @@ let plan ~old ~next =
     else (old_last + 1, next_last + 1)
   in
   let old_stop, next_stop = suffix (old_length - 1) (next_length - 1) in
-  let unclaimed = Hashtbl.create (max 0 (old_stop - start)) in
-  for i = old_stop - 1 downto start do
-    Hashtbl.add unclaimed old.(i) i
-  done;
+  let unclaimed = Array.init (max 0 (old_stop - start)) (fun x -> start + x) in
+  Array.stable_sort (fun x y -> String.compare old.(x) old.(y)) unclaimed;
+  let claims = Array.make (Array.length unclaimed) `Unclaimed in
+  let rec first key low high =
+    if low >= high then low
+    else
+      let middle = (low + high) / 2 in
+      if String.compare old.(unclaimed.(middle)) key < 0 then first key (middle + 1) high
+      else first key low middle
+  in
+  let rec claim key at =
+    if at < Array.length unclaimed && String.equal old.(unclaimed.(at)) key then
+      match claims.(at) with
+      | `Unclaimed ->
+          claims.(at) <- `Claimed;
+          Some unclaimed.(at)
+      | `Claimed -> claim key (at + 1)
+    else None
+  in
   let reused = ref [] in
   for j = next_stop - 1 downto start do
     Option.iter
       (fun i ->
-        Hashtbl.remove unclaimed next.(j);
         steps.(j) <- Move i;
         reused := (j, i) :: !reused)
-      (Hashtbl.find_opt unclaimed next.(j))
+      (claim next.(j) (first next.(j) 0 (Array.length unclaimed)))
   done;
   let reused = Array.of_list !reused in
   let tails = Array.make (Array.length reused) 0 in
@@ -58,4 +72,9 @@ let plan ~old ~next =
     Option.iter keep previous.(x)
   in
   if !longest > 0 then keep tails.(!longest - 1);
-  { steps; dropped = Hashtbl.fold (fun _ i dropped -> i :: dropped) unclaimed [] }
+  let dropped = ref [] in
+  Array.iteri
+    (fun at claim ->
+      match claim with `Unclaimed -> dropped := unclaimed.(at) :: !dropped | `Claimed -> ())
+    claims;
+  { steps; dropped = !dropped }

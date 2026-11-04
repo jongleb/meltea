@@ -411,8 +411,10 @@ let rec build position child =
       let root, sites = Template.clone template in
       if Array.length sites <> Array.length holes then
         Js.Exn.raiseError
-          (Printf.sprintf "melhole: template expects %d hole values, got %d"
-             (Array.length sites) (Array.length holes));
+          ("melhole: template expects "
+          ^ string_of_int (Array.length sites)
+          ^ " hole values, got "
+          ^ string_of_int (Array.length holes));
       attach position { template; root; bindings = Array.map2 bind sites holes; deps = [||] }
   | Guarded (template, count, refresh) ->
       let root, sites = Template.clone template in

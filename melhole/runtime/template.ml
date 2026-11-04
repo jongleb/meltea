@@ -69,9 +69,9 @@ let clone t =
   let root = Dom_api.clone_node (Lazy.force t.root) in
   let fail path =
     Js.Exn.raiseError
-      (Printf.sprintf "melhole: template path [%s] does not resolve in %s"
-         (String.concat "; " (List.map string_of_int path))
-         t.html)
+      ("melhole: template path ["
+      ^ String.concat "; " (List.map string_of_int path)
+      ^ "] does not resolve in " ^ t.html)
   in
   let rec slot candidate index =
     match (candidate, index) with
