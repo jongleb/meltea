@@ -30,7 +30,7 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/compiled-dark.svg">
-  <img src="assets/compiled.svg" alt="Meltea is compiled like Svelte: the dynamic part of the view you write in mlx becomes a hole in static HTML that is cloned on mount, and every update compares count with its last value and writes the hole's text node directly; there is no virtual DOM" width="100%">
+  <img src="assets/compiled.svg" alt="The counter in Meltea: you write the view in mlx; Meltea compiles it into a template tree of div, two buttons and an output whose text is the only hole; when + is clicked the update makes count 42, the compiled code compares count with its last value and writes 42 into that one text node; the grey static nodes get no DOM writes; there is no virtual DOM" width="100%">
 </picture>
 
 ## How it works
