@@ -46,12 +46,22 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   the value or the key, `onCheck` of the checked state. Handlers are delegated to `document`.
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
 
-The output of the counter's view is a template and this refresh:
+The counter's view compiles to this JavaScript (names shortened):
 
 ```js
-const changed = check(block, 0, count);
-put(block, 0, handler(() => dispatch(Decrement)));    // handlers are swapped, not compared
-if (changed === Changed) put(block, 2, text(String(count)));
+const template = View.template(Template.html("<div class=\"counter\"><button>-</button>…"),
+  (scope, div) => {
+    const minus = div.firstChild, output = minus.nextSibling, plus = output.nextSibling, …;
+    return [handler_hole(scope, minus, "click"), text_hole({ parent: output, before: null }), …];
+  });
+
+const view = (count, dispatch) =>
+  View.compiled(template, 1, (scope, holes) => {
+    const changed = check(scope, 0, count);              // one === against the last count
+    set_handler(holes[0], () => dispatch(Decrement));    // handlers are swapped, not compared
+    if (changed === Changed) set_text(holes[1], String(count));
+    …
+  });
 ```
 
 ## API

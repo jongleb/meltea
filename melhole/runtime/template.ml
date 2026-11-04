@@ -9,8 +9,11 @@ type ('element, 'position) hole =
   | Class_list of 'element
 
 type position = { parent : Dom.node; before : Dom.node option }
-type sites = Dom.node -> (Dom.element, position) hole array
-type t = { root : Dom.element Lazy.t; sites : sites }
+
+type t = {
+  root : Dom.element Lazy.t;
+  paths : (int list, int list * int) hole array;
+}
 
 external first : Dom.node -> Dom.node = "firstChild" [@@mel.get]
 external next : Dom.node -> Dom.node = "nextSibling" [@@mel.get]
@@ -43,11 +46,13 @@ let parse markup within =
      Option.iter unmark (Dom_api.first_child root);
      element root)
 
-let html markup sites = { root = parse markup first; sites }
-let svg markup sites = { root = parse ("<svg>" ^ markup ^ "</svg>") (fun content -> first (first content)); sites }
+let html markup = { root = parse markup first; paths = [||] }
+let svg markup = { root = parse ("<svg>" ^ markup ^ "</svg>") (fun content -> first (first content)); paths = [||] }
+let make ~html ~holes = { root = parse html first; paths = holes }
+let clone t = Dom_api.clone_node (Lazy.force t.root)
 
-let make ~html ~holes =
-  let fail () = Js.Exn.raiseError ("melhole: a template path does not resolve in " ^ html) in
+let locate t root =
+  let fail () = Js.Exn.raiseError "melhole: a template path does not resolve" in
   let rec slot candidate index =
     match (candidate, index) with
     | _, 0 -> candidate
@@ -62,27 +67,20 @@ let make ~html ~holes =
         | Some child -> descend child rest
         | None -> fail ())
   in
-  let sites root =
-    let at path = element (descend root path) in
-    let position (path, index) =
-      let parent = descend root path in
-      { parent; before = slot (Dom_api.first_child parent) index }
-    in
-    Array.map
-      (fun hole ->
-        match hole with
-        | Attr (path, name) -> Attr (at path, name)
-        | Prop (path, name) -> Prop (at path, name)
-        | Text spot -> Text (position spot)
-        | Child spot -> Child (position spot)
-        | Handler (path, name) -> Handler (at path, name)
-        | Ref path -> Ref (at path)
-        | Style path -> Style (at path)
-        | Class_list path -> Class_list (at path))
-      holes
+  let at path = element (descend root path) in
+  let position (path, index) =
+    let parent = descend root path in
+    { parent; before = slot (Dom_api.first_child parent) index }
   in
-  { root = parse html first; sites }
-
-let clone t =
-  let root = Dom_api.clone_node (Lazy.force t.root) in
-  (root, t.sites (Dom_api.to_node root))
+  Array.map
+    (fun hole ->
+      match hole with
+      | Attr (path, name) -> Attr (at path, name)
+      | Prop (path, name) -> Prop (at path, name)
+      | Text spot -> Text (position spot)
+      | Child spot -> Child (position spot)
+      | Handler (path, name) -> Handler (at path, name)
+      | Ref path -> Ref (at path)
+      | Style path -> Style (at path)
+      | Class_list path -> Class_list (at path))
+    t.paths

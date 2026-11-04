@@ -32,22 +32,45 @@ val portal : Dom.element -> child -> child
 val memo : input array -> (unit -> child) -> child
 val items : child -> child list
 
-(** A mounted template whose holes a compiled refresh fills. *)
-type block
+(** A mounted compiled template: the values its refresh last read and what it holds. *)
+type scope
 
-(** Whether a value differs from the one a block remembers for it. *)
+(** A compiled template: its markup and how to make its holes on a fresh clone. *)
+type 'holes template
+
+(** Whether a value differs from the one a scope remembers for it. *)
 type change = Changed | Unchanged
 
-val guarded : Template.t -> int -> (block -> unit) -> child
+val template : Template.t -> (scope -> Dom.node -> 'holes) -> 'holes template
+val compiled : 'holes template -> int -> (scope -> 'holes -> unit) -> child
 val static : Template.t -> child
-val check : block -> int -> 'a -> change
-val put_attr : block -> int -> string option -> unit
-val put_prop : block -> int -> 'a -> unit
-val put_text : block -> int -> string -> unit
-val put_handler : block -> int -> (Dom.event -> unit) -> unit
-val put_ref : block -> int -> (Dom.element -> unit) -> unit
-val put_style : block -> int -> (string * string) list -> unit
-val put_child : block -> int -> child -> unit
+val check : scope -> int -> 'a -> change
+
+(** The holes of a compiled template, written directly by its refresh. *)
+module Hole : sig
+  type text
+  type attr
+  type prop
+  type style
+  type handler
+  type reference
+  type content
+end
+
+val text_hole : Template.position -> Hole.text
+val set_text : Hole.text -> string -> unit
+val attr_hole : Dom.element -> string -> Hole.attr
+val set_attr : Hole.attr -> string option -> unit
+val prop_hole : Dom.element -> string -> Hole.prop
+val set_prop : Hole.prop -> 'a -> unit
+val style_hole : Dom.element -> Hole.style
+val set_style : Hole.style -> (string * string) list -> unit
+val handler_hole : scope -> Dom.element -> string -> Hole.handler
+val set_handler : Hole.handler -> (Dom.event -> unit) -> unit
+val reference_hole : scope -> Dom.element -> Hole.reference
+val set_reference : Hole.reference -> (Dom.element -> unit) -> unit
+val content_hole : scope -> Template.position -> Hole.content
+val set_content : Hole.content -> child -> unit
 
 type mounted
 

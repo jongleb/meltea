@@ -49,33 +49,22 @@ type hole =
   | HRef of (Dom.element -> unit)
   | HChild of child
 
-(** A mounted template: its root, its holes and the values its compiled refresh last read. *)
-type block = {
-  template : Template.t;
-  root : Dom.element;
-  bindings : binding array;
+(** Whether a template's root is in the document yet. *)
+type placement = Detached | Placed
+
+(** A mounted template: the values its refresh last read, what to release, which refs to call. *)
+type scope = {
   deps : input array;
   mutable cleanups : (unit -> unit) list;  (** Newest first. *)
+  mutable references : (unit -> unit) list;  (** Called once the root is placed. *)
+  mutable placement : placement;
 }
 
-(** A template hole bound to its DOM site, with the value last written. *)
-and binding =
-  | Unbound_site of (Dom.element, Template.position) Template.hole
-      (** Not filled yet: a compiled refresh fills every hole on mount. *)
-  | Attr_site of { element : Dom.element; name : string; mutable value : string option }
-  | Prop_site of { element : Dom.element; name : string; mutable value : input }
-  | Text_site of { node : Dom.text; mutable value : string }
-  | Child_site of child_site
-  | Handler_site of Events.t
-  | Ref_site of { element : Dom.element; mutable callback : Dom.element -> unit }
-  | Style_site of { element : Dom.element; mutable value : (string * string) list }
-  | Class_site of { element : Dom.element; mutable value : string list }
-
-(** Child content in a hole, with the description it last showed. *)
-and child_site = {
-  position : Template.position;
-  mutable source : child;
-  mutable live : live;
+(** A compiled template: its markup and how to make its holes on a fresh clone. *)
+type 'holes template = {
+  markup : Template.t;
+  holes : scope -> Dom.node -> 'holes;
+  mutable lent : 'holes option;  (** The holes of a mounted clone, handed over to one refresh. *)
 }
 
 type mounted = {
@@ -94,7 +83,8 @@ type state +=
   | Keyed_state of string array * live array
   | Memo_state of input array * live
   | Portal_state of Dom.element * live
-  | Block_state of block
+  | Compiled_state of { identity : input; scope : scope; lend : unit -> unit }
+  | Static_state of Template.t
 
 let scheduler = ref Absent
 
@@ -142,8 +132,6 @@ let backwards count (position : Template.position) make =
   in
   fill (count - 1) position.before;
   result
-
-let mismatch () = Js.Exn.raiseError "melhole: hole value does not match its template hole"
 
 let text value =
   {
@@ -293,255 +281,226 @@ let portal container child =
         | _ -> None);
   }
 
-let guarded template count refresh =
+let place position root scope state =
+  insert position root;
+  scope.placement <- Placed;
+  List.iter (fun reference -> reference ()) (List.rev scope.references);
+  {
+    state;
+    each = (fun visit -> visit (Dom_api.to_node root));
+    front = (fun _ -> Some (Dom_api.to_node root));
+    release = (fun () -> List.iter (fun cleanup -> cleanup ()) (List.rev scope.cleanups));
+  }
+
+let fresh count = { deps = Array.make count (Input (ref ())); cleanups = []; references = []; placement = Detached }
+
+let template markup holes = { markup; holes; lent = None }
+
+let compiled template count refresh =
   {
     shape = Single;
     build =
       (fun position ->
-        let root, sites = Template.clone template in
-        let block =
-          {
-            template;
-            root;
-            bindings = Array.map (fun site -> Unbound_site site) sites;
-            deps = Array.make count (Input (ref ()));
-            cleanups = [];
-          }
-        in
-        refresh block;
-        Array.iter
-          (fun binding ->
-            match binding with
-            | Unbound_site _ ->
-                Js.Exn.raiseError "melhole: a compiled template left a hole unfilled"
-            | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _
-            | Ref_site _ | Style_site _ | Class_site _ ->
-                ())
-          block.bindings;
-        insert position block.root;
-        Array.iter
-          (fun binding ->
-            match binding with
-            | Ref_site site -> site.callback site.element
-            | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _
-            | Style_site _ | Class_site _ | Unbound_site _ ->
-                ())
-          block.bindings;
-        {
-          state = Block_state block;
-          each = (fun visit -> visit (Dom_api.to_node block.root));
-          front = (fun _ -> Some (Dom_api.to_node block.root));
-          release = (fun () -> List.iter (fun cleanup -> cleanup ()) (List.rev block.cleanups));
-        });
+        let root = Template.clone template.markup in
+        let scope = fresh count in
+        let holes = template.holes scope (Dom_api.to_node root) in
+        refresh scope holes;
+        place position root scope
+          (Compiled_state
+             { identity = Input template; scope; lend = (fun () -> template.lent <- Some holes) }));
     patch =
       (fun _ live ->
         match live.state with
-        | Block_state block when Dom_api.same block.template template ->
-            refresh block;
-            Some live
+        | Compiled_state mounted ->
+            let (Input identity) = mounted.identity in
+            if Dom_api.same identity template then (
+              mounted.lend ();
+              Option.iter
+                (fun holes ->
+                  template.lent <- None;
+                  refresh mounted.scope holes)
+                template.lent;
+              Some live)
+            else None
         | _ -> None);
   }
 
-let static template = guarded template 0 ignore
+let static markup =
+  {
+    shape = Single;
+    build = (fun position -> place position (Template.clone markup) (fresh 0) (Static_state markup));
+    patch =
+      (fun _ live ->
+        match live.state with
+        | Static_state shown when Dom_api.same shown markup -> Some live
+        | _ -> None);
+  }
 
-let check block index value =
-  let (Input remembered) = block.deps.(index) in
+let check scope index value =
+  let (Input remembered) = scope.deps.(index) in
   if Dom_api.same remembered value then Unchanged
   else (
-    block.deps.(index) <- Input value;
+    scope.deps.(index) <- Input value;
     Changed)
 
-let put block index create write =
-  match block.bindings.(index) with
-  | Unbound_site site -> block.bindings.(index) <- create site
-  | ( Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _ | Ref_site _
-    | Style_site _ | Class_site _ ) as binding ->
-      write binding
+module Hole = struct
+  type text = { node : Dom.text; mutable value : string }
+  type attr = { element : Dom.element; name : string; mutable value : string option }
+  type prop = { element : Dom.element; name : string; mutable value : input }
+  type style = { element : Dom.element; mutable value : (string * string) list }
+  type classes = { element : Dom.element; mutable value : string list }
+  type handler = { binding : Events.t }
+  type reference = { scope : scope; element : Dom.element; mutable callback : Dom.element -> unit }
+  type content = { position : Template.position; mutable source : child; mutable live : live }
+end
 
-let put_attr block index value =
-  put block index
-    (fun site ->
-      match site with
-      | Template.Attr (element, name) ->
-          Option.iter (Dom_api.set_attribute element name) value;
-          Attr_site { element; name; value }
-      | Prop _ | Text _ | Child _ | Handler _ | Ref _ | Style _ | Class_list _ -> mismatch ())
-    (fun binding ->
-      match binding with
-      | Attr_site site ->
-          if not (Option.equal Dom_api.same site.value value) then (
-            (match value with
-            | Some value -> Dom_api.set_attribute site.element site.name value
-            | None -> Dom_api.remove_attribute site.element site.name);
-            site.value <- value)
-      | Prop_site _ | Text_site _ | Child_site _ | Handler_site _ | Ref_site _ | Style_site _
-      | Class_site _ | Unbound_site _ ->
-          mismatch ())
+let text_hole position =
+  let node = Dom_api.create_text_node Dom_api.document "" in
+  insert position node;
+  ({ node; value = "" } : Hole.text)
 
-let put_prop block index value =
-  put block index
-    (fun site ->
-      match site with
-      | Template.Prop (element, name) ->
-          Dom_api.set_property element name value;
-          Prop_site { element; name; value = Input value }
-      | Attr _ | Text _ | Child _ | Handler _ | Ref _ | Style _ | Class_list _ -> mismatch ())
-    (fun binding ->
-      match binding with
-      | Prop_site site ->
-          let (Input old) = site.value in
-          if not (Dom_api.same old value) then (
-            Dom_api.set_property site.element site.name value;
-            site.value <- Input value)
-      | Attr_site _ | Text_site _ | Child_site _ | Handler_site _ | Ref_site _ | Style_site _
-      | Class_site _ | Unbound_site _ ->
-          mismatch ())
+let set_text (hole : Hole.text) value =
+  if not (Dom_api.same hole.value value) then (
+    Dom_api.set_data hole.node value;
+    hole.value <- value)
 
-let put_text block index value =
-  put block index
-    (fun site ->
-      match site with
-      | Template.Text position ->
-          let node = Dom_api.create_text_node Dom_api.document value in
-          insert position node;
-          Text_site { node; value }
-      | Attr _ | Prop _ | Child _ | Handler _ | Ref _ | Style _ | Class_list _ -> mismatch ())
-    (fun binding ->
-      match binding with
-      | Text_site site ->
-          if not (Dom_api.same site.value value) then (
-            Dom_api.set_data site.node value;
-            site.value <- value)
-      | Attr_site _ | Prop_site _ | Child_site _ | Handler_site _ | Ref_site _ | Style_site _
-      | Class_site _ | Unbound_site _ ->
-          mismatch ())
+let attr_hole element name : Hole.attr = { element; name; value = None }
 
-let put_handler block index next =
-  put block index
-    (fun site ->
-      match site with
-      | Template.Handler (element, event) ->
-          let handler = Events.bind element event next in
-          block.cleanups <- (fun () -> Events.release handler) :: block.cleanups;
-          Handler_site handler
-      | Attr _ | Prop _ | Text _ | Child _ | Ref _ | Style _ | Class_list _ -> mismatch ())
-    (fun binding ->
-      match binding with
-      | Handler_site handler -> Events.set handler next
-      | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Ref_site _ | Style_site _
-      | Class_site _ | Unbound_site _ ->
-          mismatch ())
+let set_attr (hole : Hole.attr) value =
+  if not (Option.equal Dom_api.same hole.value value) then (
+    (match value with
+    | Some value -> Dom_api.set_attribute hole.element hole.name value
+    | None -> Dom_api.remove_attribute hole.element hole.name);
+    hole.value <- value)
 
-let put_ref block index callback =
-  put block index
-    (fun site ->
-      match site with
-      | Template.Ref element -> Ref_site { element; callback }
-      | Attr _ | Prop _ | Text _ | Child _ | Handler _ | Style _ | Class_list _ -> mismatch ())
-    (fun binding ->
-      match binding with
-      | Ref_site site ->
-          if not (Dom_api.same site.callback callback) then (
-            site.callback <- callback;
-            callback site.element)
-      | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _ | Style_site _
-      | Class_site _ | Unbound_site _ ->
-          mismatch ())
+let prop_hole element name : Hole.prop = { element; name; value = Input (ref ()) }
 
-let put_style block index value =
-  let restyle element old =
-    let style = Dom_api.style element in
-    List.iter (fun (name, _) -> Dom_api.set_style style name "") old;
+let set_prop (hole : Hole.prop) value =
+  let (Input old) = hole.value in
+  if not (Dom_api.same old value) then (
+    Dom_api.set_property hole.element hole.name value;
+    hole.value <- Input value)
+
+let style_hole element : Hole.style = { element; value = [] }
+
+let set_style (hole : Hole.style) value =
+  if
+    not
+      (List.equal
+         (fun (name, value) (name', value') -> Dom_api.same name name' && Dom_api.same value value')
+         hole.value value)
+  then (
+    let style = Dom_api.style hole.element in
+    List.iter (fun (name, _) -> Dom_api.set_style style name "") hole.value;
     List.iter (fun (name, value) -> Dom_api.set_style style name value) value;
-    match value with [] -> Dom_api.remove_attribute element "style" | _ :: _ -> ()
+    (match value with [] -> Dom_api.remove_attribute hole.element "style" | _ :: _ -> ());
+    hole.value <- value)
+
+let classes_hole element : Hole.classes = { element; value = [] }
+
+let set_classes (hole : Hole.classes) value =
+  if not (List.equal Dom_api.same hole.value value) then (
+    let classes = Dom_api.class_list hole.element in
+    List.iter (Dom_api.remove_class classes) hole.value;
+    List.iter (Dom_api.add_class classes) value;
+    (match value with [] -> Dom_api.remove_attribute hole.element "class" | _ :: _ -> ());
+    hole.value <- value)
+
+let handler_hole scope element event =
+  let binding = Events.bind element event ignore in
+  scope.cleanups <- (fun () -> Events.release binding) :: scope.cleanups;
+  ({ binding } : Hole.handler)
+
+let set_handler (hole : Hole.handler) next = Events.set hole.binding next
+
+let reference_hole scope element =
+  let hole : Hole.reference = { scope; element; callback = ignore } in
+  scope.references <- (fun () -> hole.callback hole.element) :: scope.references;
+  hole
+
+let set_reference (hole : Hole.reference) callback =
+  if not (Dom_api.same hole.callback callback) then (
+    hole.callback <- callback;
+    match hole.scope.placement with Placed -> callback hole.element | Detached -> ())
+
+let content_hole scope position =
+  let hole : Hole.content = { position; source = empty; live = nothing } in
+  scope.cleanups <- (fun () -> hole.live.release ()) :: scope.cleanups;
+  hole
+
+let set_content (hole : Hole.content) child =
+  if not (Dom_api.same hole.source child) then (
+    hole.live <- update hole.position hole.live child;
+    hole.source <- child)
+(** A hole of a hand-written template. *)
+type site =
+  | Text_hole of Hole.text
+  | Attr_hole of Hole.attr
+  | Prop_hole of Hole.prop
+  | Style_hole of Hole.style
+  | Class_hole of Hole.classes
+  | Handler_hole of Hole.handler
+  | Reference_hole of Hole.reference
+  | Content_hole of Hole.content
+
+type state += Paths_state of Template.t * site array
+
+let tpl_instance markup values =
+  let mismatch () = Js.Exn.raiseError "melhole: hole value does not match its template hole" in
+  let refresh sites =
+    if Array.length sites <> Array.length values then
+      Js.Exn.raiseError
+        ("melhole: template expects "
+        ^ string_of_int (Array.length sites)
+        ^ " hole values, got "
+        ^ string_of_int (Array.length values));
+    Array.iter2
+      (fun site value ->
+        match (site, value) with
+        | Text_hole hole, HText value -> set_text hole value
+        | Attr_hole hole, HAttr value -> set_attr hole value
+        | Prop_hole hole, HProp value -> set_prop hole value
+        | Style_hole hole, HStyle value -> set_style hole value
+        | Class_hole hole, HClass value -> set_classes hole value
+        | Handler_hole hole, HHandler value -> set_handler hole value
+        | Reference_hole hole, HRef value -> set_reference hole value
+        | Content_hole hole, HChild value -> set_content hole value
+        | ( ( Text_hole _ | Attr_hole _ | Prop_hole _ | Style_hole _ | Class_hole _
+            | Handler_hole _ | Reference_hole _ | Content_hole _ ),
+            _ ) ->
+            mismatch ())
+      sites values
   in
-  put block index
-    (fun site ->
-      match site with
-      | Template.Style element ->
-          restyle element [];
-          Style_site { element; value }
-      | Attr _ | Prop _ | Text _ | Child _ | Handler _ | Ref _ | Class_list _ -> mismatch ())
-    (fun binding ->
-      match binding with
-      | Style_site site ->
-          if
-            not
-              (List.equal
-                 (fun (name, value) (name', value') ->
-                   Dom_api.same name name' && Dom_api.same value value')
-                 site.value value)
-          then (
-            restyle site.element site.value;
-            site.value <- value)
-      | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _ | Ref_site _
-      | Class_site _ | Unbound_site _ ->
-          mismatch ())
-
-let put_child block index child =
-  put block index
-    (fun site ->
-      match site with
-      | Template.Child position ->
-          let site : child_site = { position; source = child; live = child.build position } in
-          block.cleanups <- (fun () -> site.live.release ()) :: block.cleanups;
-          Child_site site
-      | Attr _ | Prop _ | Text _ | Handler _ | Ref _ | Style _ | Class_list _ -> mismatch ())
-    (fun binding ->
-      match binding with
-      | Child_site site ->
-          if not (Dom_api.same site.source child) then (
-            site.live <- update site.position site.live child;
-            site.source <- child)
-      | Attr_site _ | Prop_site _ | Text_site _ | Handler_site _ | Ref_site _ | Style_site _
-      | Class_site _ | Unbound_site _ ->
-          mismatch ())
-
-let tpl_instance template holes =
-  guarded template 0 (fun block ->
-      if Array.length block.bindings <> Array.length holes then
-        Js.Exn.raiseError
-          ("melhole: template expects "
-          ^ string_of_int (Array.length block.bindings)
-          ^ " hole values, got "
-          ^ string_of_int (Array.length holes));
-      Array.iteri
-        (fun index hole ->
-          match hole with
-          | HText value -> put_text block index value
-          | HAttr value -> put_attr block index value
-          | HProp value -> put_prop block index value
-          | HStyle value -> put_style block index value
-          | HHandler next -> put_handler block index next
-          | HRef callback -> put_ref block index callback
-          | HChild child -> put_child block index child
-          | HClass value ->
-              let reclass element old =
-                let classes = Dom_api.class_list element in
-                List.iter (Dom_api.remove_class classes) old;
-                List.iter (Dom_api.add_class classes) value;
-                match value with
-                | [] -> Dom_api.remove_attribute element "class"
-                | _ :: _ -> ()
-              in
-              put block index
-                (fun site ->
-                  match site with
-                  | Template.Class_list element ->
-                      reclass element [];
-                      Class_site { element; value }
-                  | Attr _ | Prop _ | Text _ | Child _ | Handler _ | Ref _ | Style _ ->
-                      mismatch ())
-                (fun binding ->
-                  match binding with
-                  | Class_site site ->
-                      if not (List.equal Dom_api.same site.value value) then (
-                        reclass site.element site.value;
-                        site.value <- value)
-                  | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _
-                  | Ref_site _ | Style_site _ | Unbound_site _ ->
-                      mismatch ()))
-        holes)
+  {
+    shape = Single;
+    build =
+      (fun position ->
+        let root = Template.clone markup in
+        let scope = fresh 0 in
+        let sites =
+          Array.map
+            (fun (site : (Dom.element, Template.position) Template.hole) ->
+              match site with
+              | Text at -> Text_hole (text_hole at)
+              | Child at -> Content_hole (content_hole scope at)
+              | Attr (element, name) -> Attr_hole (attr_hole element name)
+              | Prop (element, name) -> Prop_hole (prop_hole element name)
+              | Handler (element, event) -> Handler_hole (handler_hole scope element event)
+              | Ref element -> Reference_hole (reference_hole scope element)
+              | Style element -> Style_hole (style_hole element)
+              | Class_list element -> Class_hole (classes_hole element))
+            (Template.locate markup (Dom_api.to_node root))
+        in
+        refresh sites;
+        place position root scope (Paths_state (markup, sites)));
+    patch =
+      (fun _ live ->
+        match live.state with
+        | Paths_state (shown, sites) when Dom_api.same shown markup ->
+            refresh sites;
+            Some live
+        | _ -> None);
+  }
 
 let mount child ~parent ~before =
   let position =
