@@ -248,7 +248,7 @@ let () =
              expect focused |. to_be true;
              Js.Promise.resolve ()))
         [%mel.obj { numRuns = 8 }]);
-    test "decode inverts encode, renumbering the todos in order" (fun () ->
+    test "decode inverts encode" (fun () ->
       check
         (property (tapes ~shortest:0 ~longest:30) (fun values ->
              let tape = tape values in
@@ -260,10 +260,9 @@ let () =
                      status = [| Todomvc.Active; Completed |].(draw tape 2);
                    })
              in
-             expect (Todomvc.decode (Todomvc.encode todos))
-             |. to_equal (List.mapi (fun id (todo : Todomvc.todo) -> { todo with id }) todos)))
+             expect (Todomvc.decode (Todomvc.encode todos)) |. to_equal todos))
         [%mel.obj { numRuns = 300 }]);
-    test "decode keeps the well-formed entries of any saved text and never throws" (fun () ->
+    test "decode reads any saved text without throwing, and what it reads saves back the same" (fun () ->
       let pieces =
         [| "["; "]"; "{"; "}"; ","; ":"; "\"title\""; "\"completed\""; "\"x\""; "true"; "null"; "1" |]
       in
@@ -275,9 +274,5 @@ let () =
                  (List.init (Array.length values) (fun _ -> pieces.(draw tape (Array.length pieces))))
              in
              let decoded = Todomvc.decode text in
-             expect
-               (List.for_all
-                  (fun (todo : Todomvc.todo) -> List.mem todo.title [ "x"; "title"; "completed" ])
-                  decoded)
-             |. to_be true))
+             expect (Todomvc.decode (Todomvc.encode decoded)) |. to_equal decoded))
         [%mel.obj { numRuns = 500 }]))

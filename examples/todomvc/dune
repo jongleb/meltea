@@ -2,9 +2,9 @@
  (name todomvc)
  (modules todomvc)
  (modes melange)
- (libraries meltea melange.dom)
+ (libraries meltea jsonkit-melange melange.dom)
  (preprocess
-  (pps melange.ppx meltea-ppx)))
+  (pps melange.ppx meltea-ppx jsonkit-melange.ppx)))
 
 (melange.emit
  (target output)

@@ -69,8 +69,8 @@ const view = (count, dispatch) =>
 ## TodoMVC
 
 [`examples/todomvc`](examples/todomvc/todomvc.mlx) is the full [TodoMVC](https://todomvc.com):
-routing by `#/active` and `#/completed`, editing with Enter, Escape and blur, `localStorage`.
-8.7 kB gzip for the whole app. A row:
+routing by `#/active` and `#/completed`, editing with Enter, Escape and blur, `localStorage`
+through [jsonkit](https://github.com/melange-community/jsonkit)'s `[@@deriving json]`. A row:
 
 ```ocaml
 let row editing todo =

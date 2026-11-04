@@ -11,6 +11,7 @@ depends: [
   "melange" {>= "5.1"}
   "melhole"
   "mlx" {with-test}
+  "jsonkit-melange" {with-test}
   "odoc" {with-doc}
 ]
 build: [

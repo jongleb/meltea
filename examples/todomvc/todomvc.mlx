@@ -1,7 +1,9 @@
-(** Whether a todo is still to do. *)
-type status = Active | Completed
+open Jsonkit.Primitives
 
-type todo = { id : int; title : string; status : status }
+(** Whether a todo is still to do. *)
+type status = Active | Completed [@@deriving json]
+
+type todo = { id : int; title : string; status : status } [@@deriving json]
 
 (** Which todos the list shows, read from the URL fragment. *)
 type filter = All | Only of status
@@ -28,39 +30,22 @@ type message =
 let route hash =
   match hash with "#/active" -> Only Active | "#/completed" -> Only Completed | _ -> All
 
-let encode todos =
-  Js.Json.stringify
-    (Js.Json.array
-       (Array.of_list
-          (List.map
-             (fun todo ->
-               Js.Json.object_
-                 (Js.Dict.fromList
-                    [
-                      ("title", Js.Json.string todo.title);
-                      ("completed", Js.Json.boolean (todo.status = Completed));
-                    ]))
-             todos)))
+let encode todos = Jsonkit.to_string ([%to_json: todo list] todos)
 
 let decode saved =
-  let entries = try Js.Json.decodeArray (Js.Json.parseExn saved) with _ -> None in
-  List.mapi
-    (fun id (title, status) -> { id; title; status })
-    (List.filter_map
-       (fun entry ->
-         Option.bind (Js.Json.decodeObject entry) (fun fields ->
-             match
-               ( Option.bind (Js.Dict.get fields "title") Js.Json.decodeString,
-                 Option.bind (Js.Dict.get fields "completed") Js.Json.decodeBoolean )
-             with
-             | Some title, Some true -> Some (title, Completed)
-             | Some title, Some false -> Some (title, Active)
-             | _, _ -> None))
-       (Option.fold ~none:[] ~some:Array.to_list entries))
+  try [%of_json: todo list] (Jsonkit.of_string saved)
+  with Jsonkit.Of_string_error _ | Jsonkit.Of_json_error _ -> []
 
 let init ~saved ~hash =
   let todos = decode saved in
-  ({ todos; field = ""; editing = Not_editing; filter = route hash; next = List.length todos }, Cmd.none)
+  ( {
+      todos;
+      field = "";
+      editing = Not_editing;
+      filter = route hash;
+      next = List.fold_left (fun next todo -> max next (todo.id + 1)) 0 todos;
+    },
+    Cmd.none )
 
 let subscriptions _ = Sub.hash (fun hash -> Route (route hash))
 
