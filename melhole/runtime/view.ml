@@ -97,7 +97,6 @@ type state +=
   | Block_state of block
 
 let scheduler = ref Absent
-let unset = Input (ref ())
 
 let nothing =
   { state = Empty_state; each = (fun _ -> ()); front = (fun after -> after); release = ignore }
@@ -305,7 +304,7 @@ let guarded template count refresh =
             template;
             root;
             bindings = Array.map (fun site -> Unbound_site site) sites;
-            deps = Array.make count unset;
+            deps = Array.make count (Input (ref ()));
             cleanups = [];
           }
         in
