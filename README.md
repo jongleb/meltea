@@ -29,8 +29,8 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
 ```
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/loop-dark.svg">
-  <img src="assets/loop.svg" alt="The Meltea loop: a DOM event becomes a message, the pure update returns the next model, the pure view gives the hole values, each is compared with === and only the changed one is written to the DOM" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/compiled-dark.svg">
+  <img src="assets/compiled.svg" alt="Meltea is compiled like Svelte: the view you write in mlx becomes, at build time, a template cloned once and an update that checks count and writes its text node directly; there is no virtual DOM" width="100%">
 </picture>
 
 ## How it works
