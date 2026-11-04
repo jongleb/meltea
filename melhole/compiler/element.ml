@@ -338,7 +338,7 @@ let lowercase frontend ~loc tag arguments =
     match values with
     | [] ->
         Hoist.hoist ~loc "element"
-          (frontend.wrap loc [%expr Melhole.View.tpl_instance [%e template] [||]])
+          (frontend.wrap loc [%expr Melhole.View.static [%e template]])
     | _ :: _ ->
         frontend.wrap loc
           [%expr

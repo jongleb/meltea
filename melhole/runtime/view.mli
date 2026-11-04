@@ -39,6 +39,7 @@ type block
 type change = Changed | Unchanged
 
 val guarded : Template.t -> int -> (block -> unit) -> child
+val static : Template.t -> child
 val check : block -> int -> 'a -> change
 val put_attr : block -> int -> string option -> unit
 val put_prop : block -> int -> 'a -> unit
