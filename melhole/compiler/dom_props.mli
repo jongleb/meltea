@@ -20,6 +20,8 @@ type value =
 type kind =
   | Attribute of string * value  (** The HTML attribute name. *)
   | Property of string * value  (** The JS property name. *)
+  | Controlled of string * value
+      (** A property the user changes too ([value], [checked]): put back after input. *)
   | Handler of string * string  (** The DOM event and the [ReactEvent] family. *)
   | Style
   | Ref

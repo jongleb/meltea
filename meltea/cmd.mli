@@ -7,4 +7,6 @@ val batch : 'msg t list -> 'msg t
 val map : ('a -> 'b) -> 'a t -> 'b t
 val message : 'msg -> 'msg t
 val perform : (unit -> 'value Js.Promise.t) -> ('value -> 'msg) -> 'msg t
+val focus : string -> 'msg t
+val port : ('value -> unit) -> 'value -> 'msg t
 val run : 'msg t -> ('msg -> unit) -> unit

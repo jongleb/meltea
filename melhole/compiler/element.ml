@@ -70,6 +70,20 @@ let prop frontend ~loc ~label kind requirement value =
     | Integer -> [%type: int]
     | Decimal -> [%type: float]
   in
+  let property site kind requirement =
+    match requirement with
+    | `Required -> hole site [%expr ([%e value] : [%t type_of kind])]
+    | `Optional ->
+        let default =
+          match kind with
+          | Dom_props.Text -> [%expr ""]
+          | Flag | Booleanish -> [%expr false]
+          | Integer -> [%expr 0]
+          | Decimal -> [%expr 0.]
+        in
+        hole site
+          [%expr (Option.value ~default:[%e default] ([%e value] : [%t type_of kind] option))]
+  in
   match (kind, requirement, literal) with
   | Dom_props.Ignored, _, _ -> Absent
   | Attribute (name, Text), `Required, `String text -> Static (name, Valued text)
@@ -117,20 +131,8 @@ let prop frontend ~loc ~label kind requirement value =
       hole (Attr name)
         [%expr
           (Option.map Js.Float.toString ([%e value] : float option))]
-  | Property (name, kind), `Required, _ ->
-      hole (Prop name) [%expr ([%e value] : [%t type_of kind])]
-  | Property (name, kind), `Optional, _ ->
-      let default =
-        match kind with
-        | Text -> [%expr ""]
-        | Flag | Booleanish -> [%expr false]
-        | Integer -> [%expr 0]
-        | Decimal -> [%expr 0.]
-      in
-      hole (Prop name)
-        [%expr
-          
-            (Option.value ~default:[%e default] ([%e value] : [%t type_of kind] option))]
+  | Property (name, kind), requirement, _ -> property (Prop name) kind requirement
+  | Controlled (name, kind), requirement, _ -> property (Control name) kind requirement
   | Handler (event, family), requirement, _ ->
       hole (Handler event) (frontend.handler loc { label; event; family; requirement; value })
   | Style, requirement, _ -> hole Style (frontend.style loc requirement value)
@@ -250,6 +252,8 @@ let lowercase frontend ~loc tag arguments =
                ([%expr Melhole.View.attr_hole [%e at indices] [%e estring ~loc name]], value)
            | On_element (indices, Prop name, value) ->
                ([%expr Melhole.View.prop_hole [%e at indices] [%e estring ~loc name]], value)
+           | On_element (indices, Control name, value) ->
+               ([%expr Melhole.View.controlled_hole [%e at indices] [%e estring ~loc name]], value)
            | On_element (indices, Handler event, value) ->
                ( [%expr Melhole.View.handler_hole [%e scope] [%e at indices] [%e estring ~loc event]],
                  value )
@@ -290,7 +294,7 @@ let lowercase frontend ~loc tag arguments =
       (fun (hole : expression Markup.hole) ->
         match hole with
         | On_element (_, (Handler _ | Ref), _) -> Free.Volatile
-        | On_element (_, (Attr _ | Prop _ | Style), value) | At_position (_, _, _, value) ->
+        | On_element (_, (Attr _ | Prop _ | Control _ | Style), value) | At_position (_, _, _, value) ->
             match Free.of_expression value with
             | Free.Reads names ->
                 Free.Reads (List.filter (fun name -> List.mem name frontend.locals) names)
@@ -324,7 +328,7 @@ let lowercase frontend ~loc tag arguments =
         let writer, value =
           match hole with
           | On_element (_, Attr _, value) -> ("set_attr", value)
-          | On_element (_, Prop _, value) -> ("set_prop", value)
+          | On_element (_, (Prop _ | Control _), value) -> ("set_prop", value)
           | On_element (_, Handler _, value) -> ("set_handler", value)
           | On_element (_, Ref, value) -> ("set_reference", value)
           | On_element (_, Style, value) -> ("set_style", value)

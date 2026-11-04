@@ -509,6 +509,7 @@ type value = Text | Flag | Booleanish | Integer | Decimal
 type kind =
   | Attribute of string * value
   | Property of string * value
+  | Controlled of string * value
   | Handler of string * string
   | Style
   | Ref
@@ -600,7 +601,7 @@ let kind (prop : Prop.t) =
   | AutoPlay -> Attribute ("autoPlay", Flag)
   | Challenge -> Attribute ("challenge", Text)
   | CharSet -> Attribute ("charSet", Text)
-  | Checked -> Property ("checked", Flag)
+  | Checked -> Controlled ("checked", Flag)
   | Cite -> Attribute ("cite", Text)
   | CrossOrigin -> Attribute ("crossOrigin", Text)
   | Cols -> Attribute ("cols", Integer)
@@ -682,7 +683,7 @@ let kind (prop : Prop.t) =
   | Target -> Attribute ("target", Text)
   | Type_ -> Attribute ("type", Text)
   | UseMap -> Attribute ("useMap", Text)
-  | Value -> Property ("value", Text)
+  | Value -> Controlled ("value", Text)
   | Width -> Attribute ("width", Text)
   | Wrap -> Attribute ("wrap", Text)
   | OnCopy -> Handler ("copy", "Clipboard")

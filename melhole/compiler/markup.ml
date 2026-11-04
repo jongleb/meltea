@@ -1,4 +1,4 @@
-type site = Attr of string | Prop of string | Handler of string | Ref | Style
+type site = Attr of string | Prop of string | Control of string | Handler of string | Ref | Style
 type slot = Text_slot | Child_slot
 type static = Valued of string | Bare
 

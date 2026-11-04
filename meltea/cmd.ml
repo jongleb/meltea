@@ -1,4 +1,11 @@
 external queue_microtask : (unit -> unit) -> unit = "queueMicrotask"
+external request_animation_frame : (float -> unit) -> int = "requestAnimationFrame"
+external document : Dom.document = "document"
+
+external element_by_id : Dom.document -> string -> Dom.element option = "getElementById"
+[@@mel.send] [@@mel.return nullable]
+
+external focus_element : Dom.element -> unit = "focus" [@@mel.send]
 
 type 'msg t = Effects of (('msg -> unit) -> unit) list [@@unboxed]
 
@@ -22,4 +29,14 @@ let perform task tag =
              (task ())));
     ]
 
+let focus id =
+  Effects
+    [
+      (fun _ ->
+        ignore
+          (request_animation_frame (fun _ ->
+               Option.iter focus_element (element_by_id document id))));
+    ]
+
+let port send value = Effects [ (fun _ -> send value) ]
 let run (Effects jobs) dispatch = List.iter (fun job -> job dispatch) jobs

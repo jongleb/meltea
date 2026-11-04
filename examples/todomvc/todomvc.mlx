@@ -1,0 +1,227 @@
+(** Whether a todo is still to do. *)
+type status = Active | Completed
+
+type todo = { id : int; title : string; status : status }
+
+(** Which todos the list shows, read from the URL fragment. *)
+type filter = All | Only of status
+
+(** The todo whose title is being edited, and the text typed so far. *)
+type editing = Not_editing | Editing of { id : int; text : string }
+
+type model = { todos : todo list; field : string; editing : editing; filter : filter; next : int }
+
+type message =
+  | Type of string
+  | Add
+  | Toggle of int
+  | Toggle_all
+  | Destroy of int
+  | Clear_completed
+  | Edit of int
+  | Retype of string
+  | Commit
+  | Cancel
+  | Route of filter
+  | Ignore
+
+let route hash =
+  match hash with "#/active" -> Only Active | "#/completed" -> Only Completed | _ -> All
+
+let encode todos =
+  Js.Json.stringify
+    (Js.Json.array
+       (Array.of_list
+          (List.map
+             (fun todo ->
+               Js.Json.object_
+                 (Js.Dict.fromList
+                    [
+                      ("title", Js.Json.string todo.title);
+                      ("completed", Js.Json.boolean (todo.status = Completed));
+                    ]))
+             todos)))
+
+let decode saved =
+  let entries = try Js.Json.decodeArray (Js.Json.parseExn saved) with _ -> None in
+  List.mapi
+    (fun id (title, status) -> { id; title; status })
+    (List.filter_map
+       (fun entry ->
+         Option.bind (Js.Json.decodeObject entry) (fun fields ->
+             match
+               ( Option.bind (Js.Dict.get fields "title") Js.Json.decodeString,
+                 Option.bind (Js.Dict.get fields "completed") Js.Json.decodeBoolean )
+             with
+             | Some title, Some true -> Some (title, Completed)
+             | Some title, Some false -> Some (title, Active)
+             | _, _ -> None))
+       (Option.fold ~none:[] ~some:Array.to_list entries))
+
+let init ~saved ~hash =
+  let todos = decode saved in
+  ({ todos; field = ""; editing = Not_editing; filter = route hash; next = List.length todos }, Cmd.none)
+
+let subscriptions _ = Sub.hash (fun hash -> Route (route hash))
+
+let update message model =
+  let change id revise =
+    List.map (fun todo -> if todo.id = id then revise todo else todo) model.todos
+  in
+  match message with
+  | Type field -> ({ model with field }, Cmd.none)
+  | Add -> (
+      match Js.String.trim model.field with
+      | "" -> (model, Cmd.none)
+      | title ->
+          ( {
+              model with
+              todos = model.todos @ [ { id = model.next; title; status = Active } ];
+              field = "";
+              next = model.next + 1;
+            },
+            Cmd.none ))
+  | Toggle id ->
+      ( {
+          model with
+          todos =
+            change id (fun todo ->
+                { todo with status = (match todo.status with Active -> Completed | Completed -> Active) });
+        },
+        Cmd.none )
+  | Toggle_all ->
+      let status =
+        match List.exists (fun todo -> todo.status = Active) model.todos with
+        | true -> Completed
+        | false -> Active
+      in
+      ({ model with todos = List.map (fun todo -> { todo with status }) model.todos }, Cmd.none)
+  | Destroy id ->
+      ({ model with todos = List.filter (fun todo -> todo.id <> id) model.todos }, Cmd.none)
+  | Clear_completed ->
+      ( { model with todos = List.filter (fun todo -> todo.status = Active) model.todos },
+        Cmd.none )
+  | Edit id ->
+      Option.fold ~none:(model, Cmd.none)
+        ~some:(fun todo ->
+          ( { model with editing = Editing { id; text = todo.title } },
+            Cmd.focus ("edit-" ^ string_of_int id) ))
+        (List.find_opt (fun todo -> todo.id = id) model.todos)
+  | Retype text -> (
+      match model.editing with
+      | Editing { id; _ } -> ({ model with editing = Editing { id; text } }, Cmd.none)
+      | Not_editing -> (model, Cmd.none))
+  | Commit -> (
+      match model.editing with
+      | Not_editing -> (model, Cmd.none)
+      | Editing { id; text } -> (
+          match Js.String.trim text with
+          | "" ->
+              ( {
+                  model with
+                  todos = List.filter (fun todo -> todo.id <> id) model.todos;
+                  editing = Not_editing;
+                },
+                Cmd.none )
+          | title ->
+              ( { model with todos = change id (fun todo -> { todo with title }); editing = Not_editing },
+                Cmd.none )))
+  | Cancel -> ({ model with editing = Not_editing }, Cmd.none)
+  | Route filter -> ({ model with filter }, Cmd.none)
+  | Ignore -> (model, Cmd.none)
+
+let row editing todo =
+  let text = match editing with Editing { id; text } when id = todo.id -> Some text | _ -> None in
+  <li
+    key=(string_of_int todo.id)
+    className=(match (todo.status, text) with
+      | Active, None -> ""
+      | Completed, None -> "completed"
+      | Active, Some _ -> "editing"
+      | Completed, Some _ -> "completed editing")>
+    <div className="view">
+      <input
+        className="toggle"
+        type_="checkbox"
+        checked=(todo.status = Completed)
+        onCheck=(fun _ -> Toggle todo.id) />
+      <label onDoubleClick=(Edit todo.id)>(Html.text todo.title)</label>
+      <button className="destroy" onClick=(Destroy todo.id) />
+    </div>
+    (Option.fold ~none:Html.none
+       ~some:(fun text ->
+         <input
+           className="edit"
+           id=("edit-" ^ string_of_int todo.id)
+           value=text
+           onInput=(fun text -> Retype text)
+           onBlur=Commit
+           onKeyDown=(fun key ->
+             match key with "Enter" -> Commit | "Escape" -> Cancel | _ -> Ignore) />)
+       text)
+  </li>
+
+let view { todos; field; editing; filter; _ } =
+  <section className="todoapp">
+    <header className="header">
+      <h1>(Html.text "todos")</h1>
+      <input
+        className="new-todo"
+        placeholder="What needs to be done?"
+        autoFocus=true
+        value=field
+        onInput=(fun text -> Type text)
+        onKeyDown=(fun key -> match key with "Enter" -> Add | _ -> Ignore) />
+    </header>
+    (match todos with
+     | [] -> Html.none
+     | _ ->
+         let left = List.length (List.filter (fun todo -> todo.status = Active) todos) in
+         let link label target address =
+           <li>
+             <a
+               className=(match (filter, target) with
+                 | All, All | Only Active, Only Active | Only Completed, Only Completed -> "selected"
+                 | _, _ -> "")
+               href=address>
+               (Html.text label)
+             </a>
+           </li>
+         in
+         Html.list
+           [
+             <section className="main">
+               <input
+                 id="toggle-all"
+                 className="toggle-all"
+                 type_="checkbox"
+                 checked=(left = 0)
+                 onCheck=(fun _ -> Toggle_all) />
+               <label htmlFor="toggle-all">(Html.text "Mark all as complete")</label>
+               <ul className="todo-list">
+                 (Html.list
+                    (List.map (row editing)
+                       (List.filter
+                          (fun todo ->
+                            match filter with All -> true | Only status -> todo.status = status)
+                          todos)))
+               </ul>
+             </section>;
+             <footer className="footer">
+               <span className="todo-count">
+                 <strong>(Html.int left)</strong>
+                 (Html.text (if left = 1 then " item left" else " items left"))
+               </span>
+               <ul className="filters">
+                 (link "All" All "#/")
+                 (link "Active" (Only Active) "#/active")
+                 (link "Completed" (Only Completed) "#/completed")
+               </ul>
+               (if left < List.length todos then
+                  <button className="clear-completed" onClick=Clear_completed>
+                    (Html.text "Clear completed")
+                  </button>
+                else Html.none)
+             </footer>;
+           ])
+  </section>

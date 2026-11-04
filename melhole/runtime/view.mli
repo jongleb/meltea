@@ -63,6 +63,7 @@ val attr_hole : Dom.element -> string -> Hole.attr
 val set_attr : Hole.attr -> string option -> unit
 val prop_hole : Dom.element -> string -> Hole.prop
 val set_prop : Hole.prop -> 'a -> unit
+val controlled_hole : Dom.element -> string -> Hole.prop
 val style_hole : Dom.element -> Hole.style
 val set_style : Hole.style -> (string * string) list -> unit
 val handler_hole : scope -> Dom.element -> string -> Hole.handler

@@ -44,6 +44,8 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   immutable values make this exact: an unchanged reference is an unchanged value.
 - **Events.** `onClick=Increment` sends a message. `onInput` and `onKeyDown` take a function of
   the value or the key, `onCheck` of the checked state. Handlers are delegated to `document`.
+- **Controlled inputs.** `value` and `checked` always show the model: after typing, the field
+  gets the model's value back if the update did not take the input.
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
 
 The counter's view compiles to this JavaScript (names shortened):
@@ -64,14 +66,39 @@ const view = (count, dispatch) =>
   });
 ```
 
+## TodoMVC
+
+[`examples/todomvc`](examples/todomvc/todomvc.mlx) is the full [TodoMVC](https://todomvc.com):
+routing by `#/active` and `#/completed`, editing with Enter, Escape and blur, `localStorage`.
+8.7 kB gzip for the whole app. A row:
+
+```ocaml
+let row editing todo =
+  let text = match editing with Editing { id; text } when id = todo.id -> Some text | _ -> None in
+  <li key=(string_of_int todo.id) className=(...)>
+    <div className="view">
+      <input className="toggle" type_="checkbox" checked=(todo.status = Completed)
+        onCheck=(fun _ -> Toggle todo.id) />
+      <label onDoubleClick=(Edit todo.id)>(Html.text todo.title)</label>
+      <button className="destroy" onClick=(Destroy todo.id) />
+    </div>
+    (Option.fold ~none:Html.none ~some:(fun text -> <input className="edit" value=text ... />) text)
+  </li>
+```
+
+The update asks for focus with `Cmd.focus`, `main.mlx` saves through `Cmd.port`, and the route
+comes from `Sub.hash`. A model-based law drives it with real DOM events (typing, Enter, Escape,
+double-click, blur, clicks, hash changes) and checks the page against a plain list of todos
+after every step.
+
 ## API
 
 | module | what it gives |
 |---|---|
 | `Program` | `sandbox ~init ~update ~view root`, `element ~init ~update ~view ~subscriptions root`, `dispatch`, `flush`, `stop` |
 | `Html` | `text`, `int`, `float`, `none`, `list`, `keyed`, `map`, `memo` (Elm's `lazy`) |
-| `Cmd` | `none`, `batch`, `map`, `message`, `perform` (a promise) |
-| `Sub` | `none`, `batch`, `map`, `every` |
+| `Cmd` | `none`, `batch`, `map`, `message`, `perform` (a promise), `focus` (an element by id, after the next draw), `port` (a value out to JavaScript) |
+| `Sub` | `none`, `batch`, `map`, `every`, `hash` (the URL fragment) |
 
 Attributes are the familiar DOM props (`className`, `value`, `checked`, `disabled`, …) with
 their OCaml types; a typo is a compile error that names the element.
@@ -96,6 +123,8 @@ Property-based tests, not scenarios:
 - a message that keeps the model, or a flush with nothing pending, writes nothing;
 - a hole is evaluated once on mount and again exactly when a local it reads changes;
 - `Html.memo` and `Html.map` behave as in Elm;
+- after any change of subscriptions, a hash change sends exactly the current ones' messages;
+- TodoMVC shows the todos, the count and the route after any user actions;
 - the shared template compiler and the keyed list algorithm have their own laws, 16 of them
   checked 2,000 times each.
 

@@ -4,6 +4,7 @@
 type site =
   | Attr of string
   | Prop of string
+  | Control of string  (** A property the user changes too; put back after input. *)
   | Handler of string  (** The DOM event name. *)
   | Ref
   | Style

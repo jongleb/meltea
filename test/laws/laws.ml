@@ -430,7 +430,7 @@ let dom_props_laws =
           (fun prop ->
             let label = Dom_props.Prop.to_string prop in
             match Dom_props.kind prop with
-            | Attribute (name, _) | Property (name, _) ->
+            | Attribute (name, _) | Property (name, _) | Controlled (name, _) ->
                 well_formed name
                 && (String.length label < 5
                    || (not (String.sub label 0 4 = "aria" && Char.uppercase_ascii label.[4] = label.[4]))

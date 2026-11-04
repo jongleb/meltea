@@ -1,0 +1,23 @@
+external document : Dom.document = "document"
+
+external element_by_id : Dom.document -> string -> Dom.element option = "getElementById"
+[@@mel.send] [@@mel.return nullable]
+
+external hash : string = "hash" [@@mel.scope "window", "location"]
+
+external saved : string -> string option = "getItem"
+[@@mel.scope "localStorage"] [@@mel.return nullable]
+
+external save : string -> string -> unit = "setItem" [@@mel.scope "localStorage"]
+
+let () =
+  Option.iter
+    (fun root ->
+      ignore
+        (Program.element
+           ~init:(Todomvc.init ~saved:(Option.value ~default:"[]" (saved "todos-meltea")) ~hash)
+           ~update:(fun message model ->
+             let next, command = Todomvc.update message model in
+             (next, Cmd.batch [ command; Cmd.port (save "todos-meltea") (Todomvc.encode next.todos) ]))
+           ~view:Todomvc.view ~subscriptions:Todomvc.subscriptions root))
+    (element_by_id document "root")

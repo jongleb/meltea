@@ -126,8 +126,71 @@ let guarded_view model =
     <i>(Html.text model.draft)</i>
   </section>
 
+(** What a law subscribes to: the hash, tagged, or a timer too slow to fire. *)
+type listener = Hash_listener of int | Timer of int
+
+(** A program that only listens. *)
+type heard = Set of listener list | Heard of int * string
+
+let go_to : string -> unit =
+  [%mel.raw
+    {|function (hash) { history.replaceState(null, "", hash); window.dispatchEvent(new Event("hashchange")); }|}]
+
 let () =
   describe "Meltea laws" (fun () ->
+    test "after any change of subscriptions, a hash change sends exactly the current ones' messages"
+      (fun () ->
+        check
+          (property (tapes ~shortest:4 ~longest:60) (fun values ->
+               let tape = tape values in
+               let heard = ref [] in
+               let program =
+                 Program.element ~init:([], Cmd.none)
+                   ~update:(fun message listeners ->
+                     match message with
+                     | Set listeners -> (listeners, Cmd.none)
+                     | Heard (tag, hash) ->
+                         heard := (tag, hash) :: !heard;
+                         (listeners, Cmd.none))
+                   ~view:(fun _ -> Html.none)
+                   ~subscriptions:(fun listeners ->
+                     Sub.batch
+                       (List.map
+                          (fun listener ->
+                            match listener with
+                            | Hash_listener tag -> Sub.hash (fun hash -> Heard (tag, hash))
+                            | Timer interval -> Sub.every (100000 + interval) (fun _ -> Heard (-1, "")))
+                          listeners))
+                   (create_element document "div")
+               in
+               let rounds =
+                 List.init (1 + draw tape 6) (fun round ->
+                     let listeners =
+                       List.init (draw tape 5) (fun _ ->
+                           match draw tape 3 with
+                           | 0 -> Timer (draw tape 2)
+                           | _ -> Hash_listener (draw tape 4))
+                     in
+                     Program.dispatch program (Set listeners);
+                     Program.flush program;
+                     heard := [];
+                     let hash = "#/" ^ string_of_int round in
+                     go_to hash;
+                     ( List.sort compare !heard,
+                       List.sort compare
+                         (List.filter_map
+                            (fun listener ->
+                              match listener with
+                              | Hash_listener tag -> Some (tag, hash)
+                              | Timer _ -> None)
+                            listeners) ))
+               in
+               Program.flush program;
+               Program.stop program;
+               heard := [];
+               go_to "#/stopped";
+               expect (List.map fst rounds, !heard) |. to_equal (List.map snd rounds, [])))
+          [%mel.obj { numRuns = 300 }]);
     test "a hole is evaluated once on mount and again exactly when a local it reads changes" (fun () ->
       check
         (property (tapes ~shortest:20 ~longest:120) (fun values ->

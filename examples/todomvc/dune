@@ -1,0 +1,16 @@
+(library
+ (name todomvc)
+ (modules todomvc)
+ (modes melange)
+ (libraries meltea melange.dom)
+ (preprocess
+  (pps melange.ppx meltea-ppx)))
+
+(melange.emit
+ (target output)
+ (modules main)
+ (libraries todomvc meltea melange.dom)
+ (module_systems
+  (es6 mjs))
+ (preprocess
+  (pps melange.ppx meltea-ppx)))

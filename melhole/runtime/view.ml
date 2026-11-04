@@ -381,6 +381,19 @@ let set_prop (hole : Hole.prop) value =
     Dom_api.set_property hole.element hole.name value;
     hole.value <- Input value)
 
+let controlled_hole element name =
+  let hole = prop_hole element name in
+  let restore _ =
+    Dom_api.queue_microtask (fun () ->
+        Dom_api.queue_microtask (fun () ->
+            let (Input value) = hole.value in
+            if not (Dom_api.same (Dom_api.property element name) value) then
+              Dom_api.set_property element name value))
+  in
+  Dom_api.add_listener element "input" restore;
+  Dom_api.add_listener element "change" restore;
+  hole
+
 let style_hole element : Hole.style = { element; value = [] }
 
 let set_style (hole : Hole.style) value =

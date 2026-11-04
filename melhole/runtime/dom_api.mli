@@ -69,6 +69,7 @@ external set_attribute : Dom.element -> string -> string -> unit
 external remove_attribute : Dom.element -> string -> unit = "removeAttribute"
 [@@mel.send]
 
+external property : Dom.element -> string -> 'a = "" [@@mel.get_index]
 external set_property : Dom.element -> string -> 'a -> unit = ""
 [@@mel.set_index]
 
