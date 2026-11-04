@@ -14,7 +14,7 @@ let take : type a. slots -> a key -> (unit -> a) -> a =
   let at = slots.cursor in
   slots.cursor <- at + 1;
   if at < slots.count then
-    let (Slot (Key stored, value)) = slots.items.(at) in
+    let (Slot (Key stored, value)) = Array.unsafe_get slots.items at in
     match Type.Id.provably_equal stored witness with
     | Some Equal -> value
     | None ->
@@ -28,6 +28,6 @@ let take : type a. slots -> a key -> (unit -> a) -> a =
       Array.blit slots.items 0 grown 0 at;
       slots.items <- grown
     end;
-    slots.items.(at) <- slot;
+    Array.unsafe_set slots.items at slot;
     slots.count <- at + 1;
     value

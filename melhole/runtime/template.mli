@@ -12,7 +12,7 @@ type ('element, 'position) hole =
   | Class_list of 'element  (** Classes switched on in the element. *)
 
 (** Where inserted content goes: before [before], or appended to [parent]. *)
-type position = { parent : Dom.node; before : Dom.node option }
+type position = { parent : Dom.node; before : Dom.node Js.null }
 
 type t
 
@@ -33,10 +33,7 @@ val locate : t -> Dom.node -> (Dom.element, position) hole array
 external first : Dom.node -> Dom.node = "firstChild" [@@mel.get]
 external next : Dom.node -> Dom.node = "nextSibling" [@@mel.get]
 
-external first_or_end : Dom.node -> Dom.node option = "firstChild"
-[@@mel.get] [@@mel.return nullable]
-
-external next_or_end : Dom.node -> Dom.node option = "nextSibling"
-[@@mel.get] [@@mel.return nullable]
+external first_or_end : Dom.node -> Dom.node Js.null = "firstChild" [@@mel.get]
+external next_or_end : Dom.node -> Dom.node Js.null = "nextSibling" [@@mel.get]
 
 external element : Dom.node -> Dom.element = "%identity"

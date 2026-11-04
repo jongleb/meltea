@@ -4,49 +4,56 @@ type t = { steps : step array; dropped : int list }
 let plan ~old ~next =
   let old_length = Array.length old and next_length = Array.length next in
   let steps = Array.make next_length Create in
-  let rec prefix i =
-    if i < old_length && i < next_length && String.equal old.(i) next.(i) then (
-      steps.(i) <- Keep i;
-      prefix (i + 1))
-    else i
+  let same i j = String.equal (Array.unsafe_get old i) (Array.unsafe_get next j) in
+  let rec narrow old_start old_stop next_start next_stop =
+    match (old_start < old_stop && next_start < next_stop) with
+    | false -> (old_start, old_stop, next_start, next_stop)
+    | true ->
+        if same old_start next_start then (
+          Array.unsafe_set steps next_start (Keep old_start);
+          narrow (old_start + 1) old_stop (next_start + 1) next_stop)
+        else if same (old_stop - 1) (next_stop - 1) then (
+          Array.unsafe_set steps (next_stop - 1) (Keep (old_stop - 1));
+          narrow old_start (old_stop - 1) next_start (next_stop - 1))
+        else if
+          old_stop - old_start >= 3
+          && next_stop - next_start >= 3
+          && same old_start (next_stop - 1)
+          && same (old_stop - 1) next_start
+          && same (old_start + 1) (next_start + 1)
+        then (
+          Array.unsafe_set steps next_start (Move (old_stop - 1));
+          Array.unsafe_set steps (next_stop - 1) (Move old_start);
+          narrow (old_start + 1) (old_stop - 1) (next_start + 1) (next_stop - 1))
+        else (old_start, old_stop, next_start, next_stop)
   in
-  let start = prefix 0 in
-  let rec suffix old_last next_last =
-    if
-      old_last >= start && next_last >= start
-      && String.equal old.(old_last) next.(next_last)
-    then (
-      steps.(next_last) <- Keep old_last;
-      suffix (old_last - 1) (next_last - 1))
-    else (old_last + 1, next_last + 1)
-  in
-  let old_stop, next_stop = suffix (old_length - 1) (next_length - 1) in
-  let unclaimed = Array.init (max 0 (old_stop - start)) (fun x -> start + x) in
-  Array.stable_sort (fun x y -> String.compare old.(x) old.(y)) unclaimed;
+  let old_start, old_stop, next_start, next_stop = narrow 0 old_length 0 next_length in
+  let unclaimed = Array.init (max 0 (old_stop - old_start)) (fun x -> old_start + x) in
+  Array.stable_sort (fun x y -> String.compare (Array.unsafe_get old x) (Array.unsafe_get old y)) unclaimed;
   let claims = Array.make (Array.length unclaimed) `Unclaimed in
   let rec first key low high =
     if low >= high then low
     else
       let middle = (low + high) / 2 in
-      if String.compare old.(unclaimed.(middle)) key < 0 then first key (middle + 1) high
+      if String.compare (Array.unsafe_get old (Array.unsafe_get unclaimed middle)) key < 0 then first key (middle + 1) high
       else first key low middle
   in
   let rec claim key at =
-    if at < Array.length unclaimed && String.equal old.(unclaimed.(at)) key then
-      match claims.(at) with
+    if at < Array.length unclaimed && String.equal (Array.unsafe_get old (Array.unsafe_get unclaimed at)) key then
+      match Array.unsafe_get claims at with
       | `Unclaimed ->
-          claims.(at) <- `Claimed;
-          Some unclaimed.(at)
+          Array.unsafe_set claims at `Claimed;
+          Some (Array.unsafe_get unclaimed at)
       | `Claimed -> claim key (at + 1)
     else None
   in
   let reused = ref [] in
-  for j = next_stop - 1 downto start do
+  for j = next_stop - 1 downto next_start do
     Option.iter
       (fun i ->
-        steps.(j) <- Move i;
+        Array.unsafe_set steps j (Move i);
         reused := (j, i) :: !reused)
-      (claim next.(j) (first next.(j) 0 (Array.length unclaimed)))
+      (claim (Array.unsafe_get next j) (first (Array.unsafe_get next j) 0 (Array.length unclaimed)))
   done;
   let reused = Array.of_list !reused in
   let tails = Array.make (Array.length reused) 0 in
@@ -58,23 +65,23 @@ let plan ~old ~next =
         if low >= high then low
         else
           let middle = (low + high) / 2 in
-          if snd reused.(tails.(middle)) < source then search (middle + 1) high
+          if snd (Array.unsafe_get reused (Array.unsafe_get tails middle)) < source then search (middle + 1) high
           else search low middle
       in
       let at = search 0 !longest in
-      previous.(x) <- (if at = 0 then None else Some tails.(at - 1));
-      tails.(at) <- x;
+      Array.unsafe_set previous x (if at = 0 then None else Some (Array.unsafe_get tails (at - 1)));
+      Array.unsafe_set tails at x;
       longest := max !longest (at + 1))
     reused;
   let rec keep x =
-    let j, i = reused.(x) in
-    steps.(j) <- Keep i;
-    Option.iter keep previous.(x)
+    let j, i = Array.unsafe_get reused x in
+    Array.unsafe_set steps j (Keep i);
+    Option.iter keep (Array.unsafe_get previous x)
   in
-  if !longest > 0 then keep tails.(!longest - 1);
+  if !longest > 0 then keep (Array.unsafe_get tails (!longest - 1));
   let dropped = ref [] in
   Array.iteri
     (fun at claim ->
-      match claim with `Unclaimed -> dropped := unclaimed.(at) :: !dropped | `Claimed -> ())
+      match claim with `Unclaimed -> dropped := (Array.unsafe_get unclaimed at) :: !dropped | `Claimed -> ())
     claims;
   { steps; dropped = !dropped }

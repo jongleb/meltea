@@ -41,8 +41,8 @@ type 'holes template
 (** Whether a value differs from the one a scope remembers for it. *)
 type change = Changed | Unchanged
 
-val template : Template.t -> (scope -> Dom.node -> 'holes) -> 'holes template
-val compiled : 'holes template -> int -> (scope -> 'holes -> unit) -> child
+val template : Template.t -> (scope -> Dom.node -> 'holes[@u]) -> 'holes template
+val compiled : 'holes template -> int -> (scope -> 'holes -> unit[@u]) -> child
 val static : Template.t -> child
 val check : scope -> int -> 'a -> change
 
