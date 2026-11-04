@@ -46,19 +46,19 @@ let mapper =
               | _ -> [%expr __melhole_dispatch [%e message]]
             in
             match requirement with
-            | `Required -> [%expr Melhole.View.HHandler (fun __melhole_event -> [%e send value])]
+            | `Required -> [%expr (fun __melhole_event -> [%e send value])]
             | `Optional ->
                 [%expr
-                  Melhole.View.HHandler
+                  
                     (fun __melhole_event ->
                       Option.iter (fun __melhole_message -> [%e send [%expr __melhole_message]]) [%e value])]);
         style =
           (fun loc requirement value ->
             match requirement with
-            | `Required -> [%expr Melhole.View.HStyle ([%e value] : (string * string) list)]
+            | `Required -> [%expr ([%e value] : (string * string) list)]
             | `Optional ->
                 [%expr
-                  Melhole.View.HStyle
+                  
                     (Option.value ~default:[] ([%e value] : (string * string) list option))]);
         reference =
           (fun loc _ _ ->

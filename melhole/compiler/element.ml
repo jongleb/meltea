@@ -74,51 +74,51 @@ let prop frontend ~loc ~label kind requirement value =
   | Dom_props.Ignored, _, _ -> Absent
   | Attribute (name, Text), `Required, `String text -> Static (name, Valued text)
   | Attribute (name, Text), `Required, _ ->
-      hole (Attr name) [%expr Melhole.View.HAttr (Some ([%e value] : string))]
+      hole (Attr name) [%expr (Some ([%e value] : string))]
   | Attribute (name, Flag), `Required, `True -> Static (name, Bare)
   | Attribute (_, Flag), `Required, `False -> Absent
   | Attribute (name, Flag), `Required, _ ->
       hole (Attr name)
-        [%expr Melhole.View.HAttr (if ([%e value] : bool) then Some "" else None)]
+        [%expr (if ([%e value] : bool) then Some "" else None)]
   | Attribute (name, Booleanish), `Required, `True -> Static (name, Valued "true")
   | Attribute (name, Booleanish), `Required, `False -> Static (name, Valued "false")
   | Attribute (name, Booleanish), `Required, _ ->
       hole (Attr name)
         [%expr
-          Melhole.View.HAttr (Some (if ([%e value] : bool) then "true" else "false"))]
+          (Some (if ([%e value] : bool) then "true" else "false"))]
   | Attribute (name, (Integer | Decimal)), `Required, `Number digits ->
       Static (name, Valued digits)
   | Attribute (name, Integer), `Required, _ ->
       hole (Attr name)
-        [%expr Melhole.View.HAttr (Some (string_of_int ([%e value] : int)))]
+        [%expr (Some (string_of_int ([%e value] : int)))]
   | Attribute (name, Decimal), `Required, _ ->
       hole (Attr name)
-        [%expr Melhole.View.HAttr (Some (Js.Float.toString ([%e value] : float)))]
+        [%expr (Some (Js.Float.toString ([%e value] : float)))]
   | Attribute (name, Text), `Optional, _ ->
-      hole (Attr name) [%expr Melhole.View.HAttr ([%e value] : string option)]
+      hole (Attr name) [%expr ([%e value] : string option)]
   | Attribute (name, Flag), `Optional, _ ->
       hole (Attr name)
         [%expr
-          Melhole.View.HAttr
+          
             (match ([%e value] : bool option) with
             | Some true -> Some ""
             | Some false | None -> None)]
   | Attribute (name, Booleanish), `Optional, _ ->
       hole (Attr name)
         [%expr
-          Melhole.View.HAttr
+          
             (Option.map
                (fun flag -> if flag then "true" else "false")
                ([%e value] : bool option))]
   | Attribute (name, Integer), `Optional, _ ->
       hole (Attr name)
-        [%expr Melhole.View.HAttr (Option.map string_of_int ([%e value] : int option))]
+        [%expr (Option.map string_of_int ([%e value] : int option))]
   | Attribute (name, Decimal), `Optional, _ ->
       hole (Attr name)
         [%expr
-          Melhole.View.HAttr (Option.map Js.Float.toString ([%e value] : float option))]
+          (Option.map Js.Float.toString ([%e value] : float option))]
   | Property (name, kind), `Required, _ ->
-      hole (Prop name) [%expr Melhole.View.HProp ([%e value] : [%t type_of kind])]
+      hole (Prop name) [%expr ([%e value] : [%t type_of kind])]
   | Property (name, kind), `Optional, _ ->
       let default =
         match kind with
@@ -129,18 +129,18 @@ let prop frontend ~loc ~label kind requirement value =
       in
       hole (Prop name)
         [%expr
-          Melhole.View.HProp
+          
             (Option.value ~default:[%e default] ([%e value] : [%t type_of kind] option))]
   | Handler (event, family), requirement, _ ->
       hole (Handler event) (frontend.handler loc { label; event; family; requirement; value })
   | Style, requirement, _ -> hole Style (frontend.style loc requirement value)
   | Ref, requirement, _ -> hole Ref (frontend.reference loc requirement value)
   | Inner_html, `Required, _ ->
-      hole (Prop "innerHTML") [%expr Melhole.View.HProp [%e value]##__html]
+      hole (Prop "innerHTML") [%expr [%e value]##__html]
   | Inner_html, `Optional, _ ->
       hole (Prop "innerHTML")
         [%expr
-          Melhole.View.HProp
+          
             (Option.fold ~none:"" ~some:(fun html -> html##__html) [%e value])]
 
 let rec analyse frontend ~loc tag arguments =
@@ -158,7 +158,7 @@ let rec analyse frontend ~loc tag arguments =
                 [
                   Markup.Slot
                     ( Child_slot,
-                      [%expr Melhole.View.HChild [%e frontend.unwrap loc (frontend.map value)]] );
+                      [%expr [%e frontend.unwrap loc (frontend.map value)]] );
                 ])
       | Labelled name | Optional name -> (
           let requirement =
@@ -206,22 +206,22 @@ and child frontend item =
           Some
             (Markup.Slot
                ( Text_slot,
-                 [%expr Melhole.View.HText (string_of_int ([%e frontend.map value] : int))] ))
+                 [%expr (string_of_int ([%e frontend.map value] : int))] ))
       | Some (Text (Float_text, value)) ->
           Some
             (Markup.Slot
                ( Text_slot,
                  [%expr
-                   Melhole.View.HText (Js.Float.toString ([%e frontend.map value] : float))] ))
+                   (Js.Float.toString ([%e frontend.map value] : float))] ))
       | Some (Text (String_text, value)) ->
           Some
             (Markup.Slot
-               (Text_slot, [%expr Melhole.View.HText ([%e frontend.map value] : string)]))
+               (Text_slot, [%expr ([%e frontend.map value] : string)]))
       | None ->
           Some
             (Markup.Slot
                ( Child_slot,
-                 [%expr Melhole.View.HChild [%e frontend.unwrap loc (frontend.map item)]] )))
+                 [%expr [%e frontend.unwrap loc (frontend.map item)]] )))
 
 let lowercase frontend ~loc tag arguments =
   let element, key = analyse frontend ~loc tag arguments in
@@ -289,8 +289,21 @@ let lowercase frontend ~loc tag arguments =
   let block = [%expr __melhole_block] in
   let puts =
     List.mapi
-      (fun index (guard, value) ->
-        let put = [%expr Melhole.View.put [%e block] [%e eint ~loc index] [%e value]] in
+      (fun index (guard, (hole : expression Markup.hole)) ->
+        let writer, value =
+          match hole with
+          | On_element (_, Attr _, value) -> ("put_attr", value)
+          | On_element (_, Prop _, value) -> ("put_prop", value)
+          | On_element (_, Handler _, value) -> ("put_handler", value)
+          | On_element (_, Ref, value) -> ("put_ref", value)
+          | On_element (_, Style, value) -> ("put_style", value)
+          | At_position (_, _, Text_slot, value) -> ("put_text", value)
+          | At_position (_, _, Child_slot, value) -> ("put_child", value)
+        in
+        let put =
+          [%expr
+            [%e evar ~loc ("Melhole.View." ^ writer)] [%e block] [%e eint ~loc index] [%e value]]
+        in
         match guard with
         | Free.Volatile -> put
         | Free.Reads names ->
@@ -304,7 +317,7 @@ let lowercase frontend ~loc tag arguments =
                 case ~lhs:unchanged ~guard:None ~rhs:[%expr ()];
                 case ~lhs:[%pat? _] ~guard:None ~rhs:put;
               ])
-      (List.combine guards values)
+      (List.combine guards holes)
   in
   let checks =
     List.mapi (fun index name -> (index, evar ~loc name)) variables

@@ -40,7 +40,13 @@ type change = Changed | Unchanged
 
 val guarded : Template.t -> int -> (block -> unit) -> child
 val check : block -> int -> 'a -> change
-val put : block -> int -> hole -> unit
+val put_attr : block -> int -> string option -> unit
+val put_prop : block -> int -> 'a -> unit
+val put_text : block -> int -> string -> unit
+val put_handler : block -> int -> (Dom.event -> unit) -> unit
+val put_ref : block -> int -> (Dom.element -> unit) -> unit
+val put_style : block -> int -> (string * string) list -> unit
+val put_child : block -> int -> child -> unit
 
 type mounted
 

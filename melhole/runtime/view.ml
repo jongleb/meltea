@@ -325,6 +325,74 @@ let mark_region (position : Template.position) instance =
       insert position node;
       instance.region <- Marker node
 
+let mismatch () = Js.Exn.raiseError "melhole: hole value does not match its template hole"
+
+let write_attr binding value =
+  match binding with
+  | Attr_site site ->
+      if not (Option.equal Dom_api.same site.value value) then (
+        (match value with
+        | Some value -> Dom_api.set_attribute site.element site.name value
+        | None -> Dom_api.remove_attribute site.element site.name);
+        site.value <- value)
+  | Prop_site _ | Text_site _ | Child_site _ | Handler_site _ | Ref_site _ | Style_site _
+  | Class_site _ | Unbound_site _ ->
+      mismatch ()
+
+let write_prop binding value =
+  match binding with
+  | Prop_site site ->
+      let (Input old) = site.value in
+      if not (Dom_api.same old value) then (
+        Dom_api.set_property site.element site.name value;
+        site.value <- Input value)
+  | Attr_site _ | Text_site _ | Child_site _ | Handler_site _ | Ref_site _ | Style_site _
+  | Class_site _ | Unbound_site _ ->
+      mismatch ()
+
+let write_text binding value =
+  match binding with
+  | Text_site site ->
+      if not (Dom_api.same site.value value) then (
+        Dom_api.set_data site.node value;
+        site.value <- value)
+  | Attr_site _ | Prop_site _ | Child_site _ | Handler_site _ | Ref_site _ | Style_site _
+  | Class_site _ | Unbound_site _ ->
+      mismatch ()
+
+let write_handler binding next =
+  match binding with
+  | Handler_site handler -> Events.set handler next
+  | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Ref_site _ | Style_site _
+  | Class_site _ | Unbound_site _ ->
+      mismatch ()
+
+let write_ref binding callback =
+  match binding with
+  | Ref_site site ->
+      if not (Dom_api.same site.callback callback) then (
+        site.callback <- callback;
+        callback site.element)
+  | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _ | Style_site _
+  | Class_site _ | Unbound_site _ ->
+      mismatch ()
+
+let write_style binding value =
+  match binding with
+  | Style_site site ->
+      if
+        not
+          (List.equal
+             (fun (name, value) (name', value') ->
+               Dom_api.same name name' && Dom_api.same value value')
+             site.value value)
+      then (
+        restyle site.element site.value value;
+        site.value <- value)
+  | Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _ | Ref_site _
+  | Class_site _ | Unbound_site _ ->
+      mismatch ()
+
 let rec build position child =
   match child with
   | Text value ->
@@ -549,40 +617,16 @@ and update position live child =
 
 and rewrite binding hole =
   match (binding, hole) with
-  | Attr_site site, HAttr value ->
-      if not (Option.equal Dom_api.same site.value value) then (
-        (match value with
-        | Some value -> Dom_api.set_attribute site.element site.name value
-        | None -> Dom_api.remove_attribute site.element site.name);
-        site.value <- value)
-  | Prop_site site, HProp value ->
-      let (Input old) = site.value in
-      if not (Dom_api.same old value) then (
-        Dom_api.set_property site.element site.name value;
-        site.value <- Input value)
-  | Text_site site, HText value ->
-      if not (Dom_api.same site.value value) then (
-        Dom_api.set_data site.node value;
-        site.value <- value)
+  | Attr_site _, HAttr value -> write_attr binding value
+  | Prop_site _, HProp value -> write_prop binding value
+  | Text_site _, HText value -> write_text binding value
   | Child_site site, HChild child ->
       if not (Dom_api.same site.source child) then (
         site.live <- update site.position site.live child;
         site.source <- child)
-  | Handler_site handler, HHandler next -> Events.set handler next
-  | Ref_site site, HRef callback ->
-      if not (Dom_api.same site.callback callback) then (
-        site.callback <- callback;
-        callback site.element)
-  | Style_site site, HStyle value ->
-      if
-        not
-          (List.equal
-             (fun (name, value) (name', value') ->
-               Dom_api.same name name' && Dom_api.same value value')
-             site.value value)
-      then (
-        restyle site.element site.value value;
-        site.value <- value)
+  | Handler_site _, HHandler next -> write_handler binding next
+  | Ref_site _, HRef callback -> write_ref binding callback
+  | Style_site _, HStyle value -> write_style binding value
   | Class_site site, HClass value ->
       if not (List.equal Dom_api.same site.value value) then (
         reclass site.element site.value value;
@@ -590,14 +634,22 @@ and rewrite binding hole =
   | ( ( Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _
       | Ref_site _ | Style_site _ | Class_site _ | Unbound_site _ ),
       _ ) ->
-      Js.Exn.raiseError "melhole: hole value does not match its template hole"
+      mismatch ()
 
-let put block index hole =
+let put block index hole write =
   match block.bindings.(index) with
-  | Unbound_site site -> block.bindings.(index) <- bind site hole
+  | Unbound_site site -> block.bindings.(index) <- bind site (hole ())
   | ( Attr_site _ | Prop_site _ | Text_site _ | Child_site _ | Handler_site _ | Ref_site _
     | Style_site _ | Class_site _ ) as binding ->
-      rewrite binding hole
+      write binding
+
+let put_attr block index value = put block index (fun () -> HAttr value) (fun binding -> write_attr binding value)
+let put_prop block index value = put block index (fun () -> HProp value) (fun binding -> write_prop binding value)
+let put_text block index value = put block index (fun () -> HText value) (fun binding -> write_text binding value)
+let put_handler block index next = put block index (fun () -> HHandler next) (fun binding -> write_handler binding next)
+let put_ref block index callback = put block index (fun () -> HRef callback) (fun binding -> write_ref binding callback)
+let put_style block index value = put block index (fun () -> HStyle value) (fun binding -> write_style binding value)
+let put_child block index child = put block index (fun () -> HChild child) (fun binding -> rewrite binding (HChild child))
 
 let check block index value =
   let (Input remembered) = block.deps.(index) in
