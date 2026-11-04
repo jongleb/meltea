@@ -33,3 +33,18 @@ type 'value hole =
 
 val void : string -> [ `Void | `Container ]
 val render : 'value element -> string * 'value hole list
+
+(** How generated code reaches a node of a clone. *)
+type step =
+  | First_of of int list  (** The first child of the node at that path. *)
+  | Next_of of int list  (** The next sibling of the node at that path. *)
+
+(** Where an inserted node goes, given the parent's path. *)
+type anchor =
+  | First_or_end of int list  (** Before the parent's first child, or appended. *)
+  | Next_or_end of int list  (** Before the next sibling of that node, or appended. *)
+
+val walk : 'value hole list -> (int list * step) list
+(** Every node the holes need below the root, each after the node it is reached from. *)
+
+val anchor : int list -> int -> anchor

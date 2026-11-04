@@ -226,32 +226,64 @@ and child frontend item =
 let lowercase frontend ~loc tag arguments =
   let element, key = analyse frontend ~loc tag arguments in
   let html, holes = Markup.render element in
-  let path indices = elist ~loc (List.map (eint ~loc) indices) in
+  let name indices =
+    "__melhole_node" ^ String.concat "" (List.map (fun index -> "_" ^ string_of_int index) indices)
+  in
+  let node indices = evar ~loc (name indices) in
+  let walk = Markup.walk holes in
+  let position indices index =
+    let before =
+      match Markup.anchor indices index with
+      | First_or_end parent -> [%expr Melhole.Template.first_or_end [%e node parent]]
+      | Next_or_end previous -> [%expr Melhole.Template.next_or_end [%e node previous]]
+    in
+    [%expr { Melhole.Template.parent = [%e node indices]; before = [%e before] }]
+  in
+  let at indices = [%expr Melhole.Template.element [%e node indices]] in
   let specs, values =
     List.split
       (List.map
          (fun (hole : expression Markup.hole) ->
            match hole with
            | On_element (indices, Attr name, value) ->
-               ([%expr Melhole.Template.Attr ([%e path indices], [%e estring ~loc name])], value)
+               ([%expr Melhole.Template.Attr ([%e at indices], [%e estring ~loc name])], value)
            | On_element (indices, Prop name, value) ->
-               ([%expr Melhole.Template.Prop ([%e path indices], [%e estring ~loc name])], value)
+               ([%expr Melhole.Template.Prop ([%e at indices], [%e estring ~loc name])], value)
            | On_element (indices, Handler event, value) ->
-               ( [%expr Melhole.Template.Handler ([%e path indices], [%e estring ~loc event])],
-                 value )
-           | On_element (indices, Ref, value) -> ([%expr Melhole.Template.Ref [%e path indices]], value)
-           | On_element (indices, Style, value) ->
-               ([%expr Melhole.Template.Style [%e path indices]], value)
+               ([%expr Melhole.Template.Handler ([%e at indices], [%e estring ~loc event])], value)
+           | On_element (indices, Ref, value) -> ([%expr Melhole.Template.Ref [%e at indices]], value)
+           | On_element (indices, Style, value) -> ([%expr Melhole.Template.Style [%e at indices]], value)
            | At_position (indices, index, Text_slot, value) ->
-               ([%expr Melhole.Template.Text ([%e path indices], [%e eint ~loc index])], value)
+               ([%expr Melhole.Template.Text [%e position indices index]], value)
            | At_position (indices, index, Child_slot, value) ->
-               ([%expr Melhole.Template.Child ([%e path indices], [%e eint ~loc index])], value))
+               ([%expr Melhole.Template.Child [%e position indices index]], value))
          holes)
+  in
+  let sites =
+    List.fold_right
+      (fun (indices, (step : Markup.step)) body ->
+        let reach =
+          match step with
+          | First_of parent -> [%expr Melhole.Template.first [%e node parent]]
+          | Next_of previous -> [%expr Melhole.Template.next [%e node previous]]
+        in
+        [%expr let [%p pvar ~loc (name indices)] = [%e reach] in [%e body]])
+      walk (pexp_array ~loc specs)
+  in
+  let root = match holes with [] -> ppat_any ~loc | _ :: _ -> pvar ~loc (name []) in
+  let parse =
+    match element.tag with
+    | "circle" | "clipPath" | "defs" | "ellipse" | "feBlend" | "feColorMatrix" | "feComposite"
+    | "feFlood" | "feGaussianBlur" | "feMerge" | "feMergeNode" | "feOffset" | "filter"
+    | "foreignObject" | "g" | "image" | "line" | "linearGradient" | "marker" | "mask" | "path"
+    | "pattern" | "polygon" | "polyline" | "radialGradient" | "rect" | "stop" | "symbol"
+    | "text" | "textPath" | "tspan" | "use" ->
+        [%expr Melhole.Template.svg]
+    | _ -> [%expr Melhole.Template.html]
   in
   let template =
     Hoist.hoist ~loc "template"
-      [%expr
-        Melhole.Template.make ~html:[%e estring ~loc html] ~holes:[%e pexp_array ~loc specs]]
+      [%expr [%e parse] [%e estring ~loc html] (fun [%p root] -> [%e sites])]
   in
   let guards =
     List.map

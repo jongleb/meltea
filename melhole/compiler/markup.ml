@@ -100,3 +100,26 @@ let render root =
   in
   element [] root;
   (Buffer.contents html, List.rev !holes)
+
+type step = First_of of int list | Next_of of int list
+type anchor = First_or_end of int list | Next_or_end of int list
+
+let walk holes =
+  let rec needed indices =
+    match List.rev indices with
+    | [] -> []
+    | 0 :: parent -> (indices, First_of (List.rev parent)) :: needed (List.rev parent)
+    | index :: parent ->
+        let previous = List.rev ((index - 1) :: parent) in
+        (indices, Next_of previous) :: needed previous
+  in
+  List.sort_uniq compare
+    (List.concat_map
+       (fun hole ->
+         match hole with
+         | On_element (indices, _, _) | At_position (indices, 0, _, _) -> needed indices
+         | At_position (indices, index, _, _) -> needed indices @ needed (indices @ [ index - 1 ]))
+       holes)
+
+let anchor indices index =
+  match index with 0 -> First_or_end indices | _ -> Next_or_end (indices @ [ index - 1 ])

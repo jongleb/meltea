@@ -14,7 +14,29 @@ type ('element, 'position) hole =
 (** Where inserted content goes: before [before], or appended to [parent]. *)
 type position = { parent : Dom.node; before : Dom.node option }
 
+(** The holes of one clone, found from its root. *)
+type sites = Dom.node -> (Dom.element, position) hole array
+
 type t
 
+val html : string -> sites -> t
+(** HTML whose root is an HTML element; the compiler generates the [sites] walk. *)
+
+val svg : string -> sites -> t
+(** HTML whose root is an SVG element, parsed inside [<svg>]. *)
+
 val make : html:string -> holes:(int list, int list * int) hole array -> t
+(** A hand-written HTML template whose holes are given by paths, found on every clone. *)
+
 val clone : t -> Dom.element * (Dom.element, position) hole array
+
+external first : Dom.node -> Dom.node = "firstChild" [@@mel.get]
+external next : Dom.node -> Dom.node = "nextSibling" [@@mel.get]
+
+external first_or_end : Dom.node -> Dom.node option = "firstChild"
+[@@mel.get] [@@mel.return nullable]
+
+external next_or_end : Dom.node -> Dom.node option = "nextSibling"
+[@@mel.get] [@@mel.return nullable]
+
+external element : Dom.node -> Dom.element = "%identity"

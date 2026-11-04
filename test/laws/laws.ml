@@ -338,6 +338,54 @@ let markup_laws =
           List.map (fun (path, index, _) -> (path, index)) (positions (snd (Markup.render (number tree))))
         in
         List.length anchors = List.length (List.sort_uniq compare anchors));
+    Test.make ~count:2000
+      ~name:"Markup: the compiled walk reaches every hole's node through firstChild and nextSibling"
+      ~print:print_tree tree_gen (fun tree ->
+        let tree = number tree in
+        let html, holes = Markup.render tree in
+        let root = parse html in
+        let exists handle = Option.is_some (resolve root handle) in
+        let first handle = if exists (handle @ [ 0 ]) then Some (handle @ [ 0 ]) else None in
+        let next handle =
+          match List.rev handle with
+          | index :: parent when exists (List.rev ((index + 1) :: parent)) ->
+              Some (List.rev ((index + 1) :: parent))
+          | _ -> None
+        in
+        let reached =
+          List.fold_left
+            (fun reached (indices, (step : Markup.step)) ->
+              Option.bind reached (fun reached ->
+                  let source = match step with First_of source | Next_of source -> source in
+                  Option.bind (List.assoc_opt source reached) (fun handle ->
+                      Option.map
+                        (fun found -> (indices, found) :: reached)
+                        (match step with First_of _ -> first handle | Next_of _ -> next handle))))
+            (Some [ ([], []) ]) (Markup.walk holes)
+        in
+        Option.fold ~none:false
+          ~some:(fun reached ->
+            List.for_all
+              (fun (hole : int Markup.hole) ->
+                match hole with
+                | On_element (path, _, id) -> (
+                    match Option.bind (List.assoc_opt path reached) (resolve root) with
+                    | Some (Parsed_element (_, statics, _)) ->
+                        List.assoc_opt "data-n" statics = Some (Markup.Valued (string_of_int id))
+                    | Some (Parsed_text _ | Parsed_comment | Parsed_slot _) | None -> false)
+                | At_position (path, index, _, _) -> (
+                    match List.assoc_opt path reached with
+                    | None -> false
+                    | Some parent ->
+                        let expected = if exists (parent @ [ index ]) then Some (parent @ [ index ]) else None in
+                        let anchored =
+                          match Markup.anchor path index with
+                          | First_or_end at -> Option.map (fun handle -> first handle) (List.assoc_opt at reached)
+                          | Next_or_end at -> Option.map (fun handle -> next handle) (List.assoc_opt at reached)
+                        in
+                        anchored = Some expected))
+              holes)
+          reached);
     Test.make
       ~name:"Markup: parsing the HTML and inserting every slot at its position rebuilds the source"
       ~print:print_tree tree_gen (fun tree ->

@@ -36,7 +36,8 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
 ## How it works
 
 - **Templates.** `meltea-ppx` turns the static part of every view into HTML, parsed once into a
-  `<template>` and cloned. Every dynamic part is a hole with a path to its DOM node.
+  `<template>` and cloned. Every dynamic part is a hole, reached on the clone by a
+  `firstChild`/`nextSibling` walk the compiler writes out.
 - **Refresh.** For every template the compiler emits the update code, as Svelte and
   [dartea](https://github.com/jongleb/dartea) do. Each local the view reads is checked with one
   `===`; only the holes that read a changed one are evaluated and written. Pure views and
@@ -85,7 +86,7 @@ Property-based tests, not scenarios:
 - a message that keeps the model, or a flush with nothing pending, writes nothing;
 - a hole is evaluated once on mount and again exactly when a local it reads changes;
 - `Html.memo` and `Html.map` behave as in Elm;
-- the shared template compiler and the keyed list algorithm have their own laws, 15 of them
+- the shared template compiler and the keyed list algorithm have their own laws, 16 of them
   checked 2,000 times each.
 
 ```console
