@@ -1,0 +1,6 @@
+(library
+ (name melhole_compiler)
+ (public_name melhole.compiler)
+ (libraries ppxlib)
+ (preprocess
+  (pps ppxlib.metaquot ppx_deriving_variant_string ppx_enumerate)))

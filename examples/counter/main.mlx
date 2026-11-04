@@ -1,0 +1,25 @@
+type message = Increment | Decrement | Reset
+
+let update message count =
+  match message with
+  | Increment -> count + 1
+  | Decrement -> count - 1
+  | Reset -> 0
+
+let view count =
+  <div className="counter">
+    <button onClick=Decrement>(Html.text "-")</button>
+    <output className=(if count < 0 then "negative" else "")>(Html.int count)</output>
+    <button onClick=Increment>(Html.text "+")</button>
+    <button onClick=Reset disabled=(count = 0)>(Html.text "reset")</button>
+  </div>
+
+external document : Dom.document = "document"
+
+external element_by_id : Dom.document -> string -> Dom.element option = "getElementById"
+[@@mel.send] [@@mel.return nullable]
+
+let () =
+  Option.iter
+    (fun root -> ignore (Program.sandbox ~init:0 ~update ~view root))
+    (element_by_id document "root")

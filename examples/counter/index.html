@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meltea counter</title>
+    <style>
+      body { font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+      .counter { display: flex; gap: 12px; align-items: center; font-size: 24px; }
+      .counter button { font-size: 20px; min-width: 48px; padding: 4px 12px; }
+      .counter output { min-width: 3ch; text-align: center; font-variant-numeric: tabular-nums; }
+      .counter output.negative { color: crimson; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/_build/default/examples/counter/output/examples/counter/main.mjs"></script>
+  </body>
+</html>

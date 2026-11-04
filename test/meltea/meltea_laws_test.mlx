@@ -1,0 +1,222 @@
+open Testing
+
+external input_value : Dom.node -> string = "value" [@@mel.get]
+external input_checked : Dom.node -> bool = "checked" [@@mel.get]
+external select_all : Dom.element -> string -> Dom.nodeList = "querySelectorAll" [@@mel.send]
+
+type item = { id : int; title : string; finished : bool }
+
+(** Which items the list shows. *)
+type filter = All | Active | Completed
+
+type model = { items : item list; draft : string; next : int; filter : filter }
+
+type message =
+  | Type of string
+  | Add
+  | Toggle of int
+  | Remove of int
+  | Show of filter
+  | Same
+
+let init = { items = []; draft = ""; next = 0; filter = All }
+
+let update message model =
+  match message with
+  | Type draft -> { model with draft }
+  | Add -> (
+      match model.draft with
+      | "" -> model
+      | title ->
+          {
+            model with
+            items = model.items @ [ { id = model.next; title; finished = false } ];
+            draft = "";
+            next = model.next + 1;
+          })
+  | Toggle id ->
+      {
+        model with
+        items =
+          List.map
+            (fun item -> if item.id = id then { item with finished = not item.finished } else item)
+            model.items;
+      }
+  | Remove id -> { model with items = List.filter (fun item -> item.id <> id) model.items }
+  | Show filter -> { model with filter }
+  | Same -> model
+
+let row item =
+  <li key=(string_of_int item.id) className=(if item.finished then "done" else "")>
+    <input type_="checkbox" checked=item.finished onCheck=(fun _ -> Toggle item.id) />
+    <span>(Html.text item.title)</span>
+    <button onClick=(Remove item.id)>(Html.text "x")</button>
+  </li>
+
+let view model =
+  let shown =
+    List.filter
+      (fun item ->
+        match model.filter with
+        | All -> true
+        | Active -> not item.finished
+        | Completed -> item.finished)
+      model.items
+  in
+  <section>
+    <input value=model.draft onInput=(fun text -> Type text) />
+    <button onClick=Add>(Html.text "add")</button>
+    <ul>(Html.list (List.map row shown))</ul>
+    <p>(Html.int (List.length (List.filter (fun item -> not item.finished) model.items)))</p>
+  </section>
+
+(** One step of a generated run. *)
+type step = Send of message | Flush
+
+let steps tape =
+  let words = [| ""; "milk"; "tea"; "a&b" |] in
+  let rec go model remaining collected =
+    if remaining = 0 then List.rev collected
+    else
+      let ids = List.map (fun item -> item.id) model.items in
+      let pick () = List.nth ids (draw tape (List.length ids)) in
+      let step =
+        match (draw tape 8, ids) with
+        | 0, _ -> Send (Type words.(draw tape 4))
+        | 1, _ -> Send Add
+        | 2, _ :: _ -> Send (Toggle (pick ()))
+        | 3, _ :: _ -> Send (Remove (pick ()))
+        | 4, _ -> Send (Show [| All; Active; Completed |].(draw tape 3))
+        | 5, _ -> Send Same
+        | _, _ -> Flush
+      in
+      let model = match step with Send message -> update message model | Flush -> model in
+      go model (remaining - 1) (step :: collected)
+  in
+  go init (6 + draw tape 30) []
+
+let snapshot root =
+  ( shapes (as_node root),
+    Array.to_list
+      (Array.map
+         (fun node -> (input_value node, input_checked node))
+         (nodes (select_all root "input"))) )
+
+let run program steps =
+  List.iter
+    (fun step -> match step with Send message -> Program.dispatch program message | Flush -> Program.flush program)
+    steps;
+  Program.flush program
+
+let final steps =
+  List.fold_left
+    (fun model step -> match step with Send message -> update message model | Flush -> model)
+    init steps
+
+let evaluations = ref 0
+
+let counted items =
+  incr evaluations;
+  List.length items
+
+let guarded_view model =
+  let items = model.items in
+  <section>
+    <p>(Html.int (counted items))</p>
+    <i>(Html.text model.draft)</i>
+  </section>
+
+let () =
+  describe "Meltea laws" (fun () ->
+    test "a hole is evaluated once on mount and again exactly when a local it reads changes" (fun () ->
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           evaluations := 0;
+           let steps = steps (tape values) in
+           let root = create_element document "div" in
+           let program = Program.sandbox ~init ~update ~view:guarded_view root in
+           let expected = ref 1 and drawn = ref init and model = ref init in
+           List.iter
+             (fun step ->
+               match step with
+               | Send message -> model := update message !model
+               | Flush ->
+                   if not (!model.items == !drawn.items) then incr expected;
+                   drawn := !model)
+             (steps @ [ Flush ]);
+           run program steps;
+           Program.stop program;
+           expect !evaluations |. to_be !expected))
+        [%mel.obj { numRuns = 300 }]);
+    test "after any messages, the DOM is the view of fold update init messages" (fun () ->
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           let steps = steps (tape values) in
+           let root = create_element document "div" and fresh = create_element document "div" in
+           let program = Program.sandbox ~init ~update ~view root in
+           run program steps;
+           let expected = Program.sandbox ~init:(final steps) ~update ~view fresh in
+           expect (snapshot root) |. to_equal (snapshot fresh);
+           Program.stop program;
+           Program.stop expected))
+        [%mel.obj { numRuns = 300 }]);
+    test "a message that keeps the model, and a flush with nothing pending, write nothing" (fun () ->
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           let root = create_element document "div" in
+           let program = Program.sandbox ~init ~update ~view root in
+           run program (steps (tape values));
+           let watcher = observer (fun () -> ()) in
+           observe watcher root
+             [%mel.obj { childList = true; subtree = true; attributes = true; characterData = true }];
+           Program.flush program;
+           Program.dispatch program Same;
+           Program.flush program;
+           let records = Array.length (take_records watcher) in
+           disconnect watcher;
+           Program.stop program;
+           expect records |. to_be 0))
+        [%mel.obj { numRuns = 300 }]);
+    test "Html.memo calls the view exactly when the model changes physically" (fun () ->
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           let calls = ref 0 in
+           let counted model =
+             incr calls;
+             view model
+           in
+           let steps = steps (tape values) in
+           let root = create_element document "div" in
+           let program =
+             Program.sandbox ~init ~update ~view:(fun model -> Html.memo counted model) root
+           in
+           let renders = ref 1 and last = ref init and model = ref init in
+           List.iter
+             (fun step ->
+               match step with
+               | Send message -> model := update message !model
+               | Flush ->
+                   if not (!model == !last) then incr renders;
+                   last := !model)
+             (steps @ [ Flush ]);
+           run program steps;
+           Program.stop program;
+           expect !calls |. to_be !renders))
+        [%mel.obj { numRuns = 300 }]);
+    test "Html.map tags every message sent from inside" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:20) (fun values ->
+           let tape = tape values in
+           let id = draw tape 100 in
+           let seen = ref [] in
+           let root = attached () in
+           let item = { id; title = "t"; finished = false } in
+           let program =
+             Program.sandbox ~init:() ~update:(fun message () -> seen := message :: !seen)
+               ~view:(fun () -> Html.map (fun message -> (id, message)) (row item))
+               root
+           in
+           click (select root "button");
+           Program.stop program;
+           expect !seen |. to_equal [ (id, Remove id) ]))
+        [%mel.obj { numRuns = 100 }]))

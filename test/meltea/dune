@@ -1,0 +1,8 @@
+(melange.emit
+ (target output)
+ (alias runtest-js)
+ (libraries meltea testing melange.dom)
+ (module_systems
+  (es6 mjs))
+ (preprocess
+  (pps melange.ppx meltea-ppx)))

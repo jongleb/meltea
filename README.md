@@ -1,0 +1,100 @@
+<div align="center">
+
+# Meltea
+
+**The Elm architecture for OCaml and Melange: pure functions everywhere, views in mlx,
+compiled like Svelte.**
+
+</div>
+
+A model, messages, a pure `update`, a pure `view`. No hooks, no components with state, no
+virtual DOM. The view is written in mlx and compiled at build time into a DOM template with
+holes and a refresh function that writes only what changed.
+
+```ocaml
+type message = Increment | Decrement | Reset
+
+let update message count =
+  match message with Increment -> count + 1 | Decrement -> count - 1 | Reset -> 0
+
+let view count =
+  <div className="counter">
+    <button onClick=Decrement>(Html.text "-")</button>
+    <output>(Html.int count)</output>
+    <button onClick=Increment>(Html.text "+")</button>
+    <button onClick=Reset disabled=(count = 0)>(Html.text "reset")</button>
+  </div>
+
+let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view root)) root
+```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/loop-dark.svg">
+  <img src="assets/loop.svg" alt="The Meltea loop: a DOM event becomes a message, the pure update returns the next model, the pure view gives the hole values, each is compared with === and only the changed one is written to the DOM" width="100%">
+</picture>
+
+## How it works
+
+- **Templates.** `meltea-ppx` turns the static part of every view into HTML, parsed once into a
+  `<template>` and cloned. Every dynamic part is a hole with a path to its DOM node.
+- **Refresh.** For every template the compiler emits the update code, as Svelte and
+  [dartea](https://github.com/jongleb/dartea) do. Each local the view reads is checked with one
+  `===`; only the holes that read a changed one are evaluated and written. Pure views and
+  immutable values make this exact: an unchanged reference is an unchanged value.
+- **Events.** `onClick=Increment` sends a message. `onInput` and `onKeyDown` take a function of
+  the value or the key, `onCheck` of the checked state. Handlers are delegated to `document`.
+- **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
+
+The output of the counter's view is a template and this refresh:
+
+```js
+const changed = check(block, 0, count);
+put(block, 0, handler(() => dispatch(Decrement)));    // handlers are swapped, not compared
+if (changed === Changed) put(block, 2, text(String(count)));
+```
+
+## API
+
+| module | what it gives |
+|---|---|
+| `Program` | `sandbox ~init ~update ~view root`, `element ~init ~update ~view ~subscriptions root`, `dispatch`, `flush`, `stop` |
+| `Html` | `text`, `int`, `float`, `none`, `list`, `keyed`, `map`, `memo` (Elm's `lazy`) |
+| `Cmd` | `none`, `batch`, `map`, `message`, `perform` (a promise) |
+| `Sub` | `none`, `batch`, `map`, `every` |
+
+Attributes are the familiar DOM props (`className`, `value`, `checked`, `disabled`, …) with
+their OCaml types; a typo is a compile error that names the element.
+
+## Use
+
+```
+(melange.emit
+ (target app)
+ (libraries meltea)
+ (preprocess (pps melange.ppx meltea-ppx)))
+```
+
+and `(dialect (name mlx) …)` in `dune-project` for `.mlx` files. Until the opam release, pin it:
+`opam pin add melhole meltea meltea-ppx https://github.com/jongleb/meltea.git`.
+
+## Tested by laws
+
+Property-based tests, not scenarios:
+
+- after any sequence of messages, the DOM is the view of `fold update init messages`;
+- a message that keeps the model, or a flush with nothing pending, writes nothing;
+- a hole is evaluated once on mount and again exactly when a local it reads changes;
+- `Html.memo` and `Html.map` behave as in Elm;
+- the shared template compiler and the keyed list algorithm have their own laws, 15 of them
+  checked 2,000 times each.
+
+```console
+$ dune build && dune test && dune build @runtest-js && npx vitest run
+```
+
+## Where it is developed
+
+Meltea shares its runtime and compiler, `melhole`, with [Melact](https://github.com/jongleb/melact),
+the reason-react-compatible sibling for code that already lives on React. Both are developed in
+that repository; this one is a mirror of Meltea's part, exported by `scripts/publish-meltea.sh`.
+Issues and ideas are welcome here.

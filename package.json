@@ -1,0 +1,15 @@
+{
+  "name": "meltea",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only JS tooling for Meltea's tests and examples; Meltea has no runtime npm dependencies",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "fast-check": "3.23.2",
+    "jsdom": "25.0.1",
+    "vite": "5.4.11",
+    "vitest": "2.1.8"
+  }
+}

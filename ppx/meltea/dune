@@ -1,0 +1,7 @@
+(library
+ (name meltea_ppx)
+ (public_name meltea-ppx)
+ (kind ppx_rewriter)
+ (libraries ppxlib melhole.compiler)
+ (preprocess
+  (pps ppxlib.metaquot)))
