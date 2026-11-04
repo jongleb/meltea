@@ -30,7 +30,7 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/compiled-dark.svg">
-  <img src="assets/compiled.svg" alt="Meltea is compiled like Svelte: the view you write in mlx becomes, at build time, a template cloned once and an update that checks count and writes its text node directly; there is no virtual DOM" width="100%">
+  <img src="assets/compiled.svg" alt="Meltea is compiled like Svelte: the dynamic part of the view you write in mlx becomes a hole in static HTML that is cloned on mount, and every update compares count with its last value and writes the hole's text node directly; there is no virtual DOM" width="100%">
 </picture>
 
 ## How it works
