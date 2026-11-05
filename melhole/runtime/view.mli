@@ -25,8 +25,6 @@ val keyed : (string * child) list -> child
 val with_key : string -> child -> child
 val each :
   'item array -> ('item -> child[@u]) -> ('item -> input array[@u]) -> input array -> child
-(** One row of a compiled loop before it is mounted. *)
-type 'holes row
 
 (** A mounted compiled template: the values its refresh last read and what it holds. *)
 type scope
@@ -34,8 +32,17 @@ type scope
 (** A compiled template: its markup and how to make its holes on a fresh clone. *)
 type 'holes template
 
-val row : 'holes template -> int -> (scope -> 'holes -> unit[@u]) -> string -> 'holes row
-val rows : 'item array -> ('item -> 'holes row[@u]) -> ('item -> input array[@u]) -> input array -> child
+(** A compiled loop whose rows are one element each: one template, one refresh taking the item, and
+    the key of an item, shared by all rows; a row costs its nodes, its scope and one record. *)
+val rows :
+  'item array ->
+  'holes template ->
+  int ->
+  (scope -> 'holes -> 'item -> unit[@u]) ->
+  ('item -> string[@u]) ->
+  ('item -> input array[@u]) ->
+  input array ->
+  child
 val tpl_instance : Template.t -> hole array -> child
 val lazy1 : ('a -> child) -> 'a -> child
 val lazy2 : ('a -> 'b -> child) -> 'a -> 'b -> child

@@ -737,19 +737,60 @@ let loop frontend ~loc ~definitions ~view ~stable ~render row items =
             match lambda.pexp_desc with
             | Pexp_function (([ { pparam_desc = Pparam_val (Nolabel, None, _); _ } ] as parameters), None, Pfunction_body body)
               ->
-                Option.map
-                  (fun body ->
+                Option.bind (marked body) (fun body ->
                     let lambda = { lambda with pexp_desc = Pexp_function (parameters, None, Pfunction_body body) } in
-                    let loop =
-                      [%expr
-                        Melhole.View.rows [%e items]
-                          [%e uncurried [%expr fun __melhole_item -> [%e frontend.map lambda] __melhole_item]]
-                          [%e uncurried project] [%e outer]]
+                    let mapped = frontend.map lambda in
+                    let split =
+                      match mapped.pexp_desc with
+                      | Pexp_function
+                          ([ { pparam_desc = Pparam_val (Nolabel, None, pattern); _ } ], None, Pfunction_body body) ->
+                          let rec tail body =
+                            match body.pexp_desc with
+                            | Pexp_let (flag, bindings, rest) ->
+                                Option.map
+                                  (fun (rebuild, found) ->
+                                    ((fun inner -> { body with pexp_desc = Pexp_let (flag, bindings, rebuild inner) }), found))
+                                  (tail rest)
+                            | Pexp_apply
+                                ( { pexp_desc = Pexp_ident { txt = Ldot (Ldot (Lident "Melhole", "View"), "row"); _ }; _ },
+                                  [
+                                    (Nolabel, template);
+                                    (Nolabel, slots);
+                                    (Nolabel, { pexp_desc = Pexp_record ([ (_, refresh) ], None); _ });
+                                    (Nolabel, key);
+                                  ] ) -> (
+                                match refresh.pexp_desc with
+                                | Pexp_function (parameters, None, Pfunction_body refreshing) ->
+                                    Some ((fun inner -> inner), (template, slots, parameters, refreshing, key))
+                                | _ -> None)
+                            | _ -> None
+                          in
+                          Option.map (fun (rebuild, parts) -> (pattern, rebuild, parts)) (tail body)
+                      | _ -> None
                     in
-                    match row.pexp_desc with
-                    | Pexp_ident _ -> [%expr let _ = [%e row] in [%e loop]]
-                    | _ -> loop)
-                  (marked body)
+                    Option.map
+                      (fun (pattern, rebuild, (template, slots, parameters, refreshing, key)) ->
+                        let given body = [%expr (let [%p pattern] = __melhole_item in [%e rebuild body]) [@ocaml.warning "-26-27"]] in
+                        let refresh =
+                          pexp_record ~loc
+                            [
+                              ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I3"); loc },
+                                pexp_function ~loc
+                                  (parameters @ [ { pparam_loc = loc; pparam_desc = Pparam_val (Nolabel, None, [%pat? __melhole_item]) } ])
+                                  None (Pfunction_body (given refreshing)) );
+                            ]
+                            None
+                        in
+                        let loop =
+                          [%expr
+                            Melhole.View.rows [%e items] [%e template] [%e slots] [%e refresh]
+                              [%e uncurried [%expr fun __melhole_item -> [%e given key]]]
+                              [%e uncurried project] [%e outer]]
+                        in
+                        match row.pexp_desc with
+                        | Pexp_ident _ -> [%expr let _ = [%e row] in [%e loop]]
+                        | _ -> loop)
+                      split)
             | _ -> None)
       in
       match compiled_rows with

@@ -102,7 +102,6 @@ type 'holes template = {
 and 'holes adoptable = Not_hydratable | Adopts of (scope -> Dom.node -> 'holes -> 'holes[@u])
 
 (** One row of a compiled loop before it is mounted: its template, how to write its holes, its key. *)
-type 'holes row = { template : 'holes template; slots : int; refresh : (scope -> 'holes -> unit[@u]); key : string }
 
 type mounted = {
   position : Template.position;
@@ -649,23 +648,24 @@ let adopted template slots refresh (position : Template.position) =
       refresh scope holes [@u];
       (root, scope, holes)
 
-let row template slots refresh key = { template; slots; refresh; key }
-
-let rows (type holes item) (items : item array) (render : (item -> holes row)[@u]) project outer =
+let rows (type holes item) (items : item array) (template : holes template) slots
+    (refresh : (scope -> holes -> item -> unit)[@u]) (key : (item -> string)[@u]) project outer =
   let count = Array.length items in
-  let mount (position : Template.position) parts =
+  let mount (position : Template.position) item =
     match !medium.adoption with
     | Fresh_nodes ->
-        let root = !medium.root position parts.template.markup [@u] in
-        let scope = fresh parts.slots in
-        let holes = parts.template.holes scope (Dom_api.to_node root) [@u] in
-        parts.refresh scope holes [@u];
+        let root = !medium.root position template.markup [@u] in
+        let scope = fresh slots in
+        let holes = template.holes scope (Dom_api.to_node root) [@u] in
+        refresh scope holes item [@u];
         settle position root scope;
-        Mounted_row { root; scope; holes; witness = parts.template.witness }
+        Mounted_row { root; scope; holes; witness = template.witness }
     | Server_nodes ->
-        let root, scope, holes = adopted parts.template parts.slots parts.refresh position in
+        let root, scope, holes =
+          adopted template slots (fun [@u] scope holes -> refresh scope holes item [@u]) position
+        in
         settle position root scope;
-        Mounted_row { root; scope; holes; witness = parts.template.witness }
+        Mounted_row { root; scope; holes; witness = template.witness }
   in
   let root_of (Mounted_row row) = Dom_api.to_node row.root in
   let after = fun [@u] row _ -> Dom_api.following_sibling (root_of row) in
@@ -696,9 +696,9 @@ let rows (type holes item) (items : item array) (render : (item -> holes row)[@u
         let rows =
           !medium.built count position
             (fun [@u] index at ->
-              let parts = render (Array.unsafe_get items index) [@u] in
-              Array.unsafe_set keys index parts.key;
-              mount at parts)
+              let item = Array.unsafe_get items index in
+              Array.unsafe_set keys index (key item [@u]);
+              mount at item)
             after [@u]
         in
         let projections = Array.make count [||] in
@@ -744,25 +744,20 @@ let rows (type holes item) (items : item array) (render : (item -> holes row)[@u
                 decr shift;
                 reuse index (from - 1) projected)
               else (
-                let parts = render item [@u] in
-                Array.unsafe_set next index (Fresh parts);
-                Array.unsafe_set keys index parts.key;
+                Array.unsafe_set next index (Fresh ());
+                Array.unsafe_set keys index (key item [@u]);
                 Array.unsafe_set projections index
                   (match projected with Some projection -> projection | None -> project item [@u]))
             done;
-            let drawn index =
-              match Array.unsafe_get next index with
-              | Fresh parts -> parts
-              | Kept _ -> render (Array.unsafe_get items index) [@u]
-            in
-            let refreshed (Mounted_row row as mounted) (parts : holes row) =
-              match Witness.equal row.witness parts.template.witness with
+            let drawn index = Array.unsafe_get items index in
+            let refreshed (Mounted_row row as mounted) item =
+              match Witness.equal row.witness template.witness with
               | Some Equal ->
-                  parts.refresh row.scope row.holes [@u];
+                  refresh row.scope row.holes item [@u];
                   mounted
               | None ->
                   let made =
-                    mount { position with before = Dom_api.following_sibling (Dom_api.to_node row.root) } parts
+                    mount { position with before = Dom_api.following_sibling (Dom_api.to_node row.root) } item
                   in
                   drop position mounted;
                   made
