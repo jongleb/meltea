@@ -96,11 +96,74 @@ let mapper =
             | _ -> None);
       }
 
-    method! structure items = Hoist.structure self#structure_item items
+    val mutable tracked : (string * string) list = []
+
+    method! structure items =
+      let known = tracked in
+      let mapped =
+        List.concat_map
+          (fun item ->
+            let companions =
+              match item.pstr_desc with
+              | Pstr_value (Nonrecursive, [ { pvb_pat = { ppat_desc = Ppat_var { txt = name; _ }; _ }; pvb_expr; _ } ]) ->
+                  let loc = item.pstr_loc in
+                  tracked <- List.filter (fun (_, other) -> not (String.equal other name)) tracked;
+                  Option.to_list
+                    (Option.map
+                       (fun changes ->
+                         tracked <- ("changes", name) :: tracked;
+                         [%stri let [%p Ast_builder.Default.pvar ~loc ("__melhole_changes_" ^ name)] = [%e changes]])
+                       (Fields.update ~loc pvb_expr))
+                  @ Option.to_list
+                      (Option.map
+                         (fun reads ->
+                           tracked <- ("reads", name) :: tracked;
+                           [%stri
+                             let [%p Ast_builder.Default.pvar ~loc ("__melhole_reads_" ^ name)] =
+                               [%e Ast_builder.Default.eint ~loc reads]])
+                         (Fields.view pvb_expr))
+              | _ -> []
+            in
+            Hoist.structure self#structure_item [ item ] @ companions)
+          items
+      in
+      tracked <- known;
+      mapped
 
     method! expression expression =
       let loc = expression.pexp_loc in
       match expression.pexp_desc with
+      | Pexp_apply
+          ( ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Program", ("sandbox" | "element")); _ }; _ } as callee),
+            arguments ) -> (
+          let named label =
+            List.find_map
+              (fun (argument_label, argument) ->
+                match (argument_label, argument.pexp_desc) with
+                | Labelled found, Pexp_ident { txt = Lident name; _ }
+                  when String.equal found label && not (List.mem name self#locals) ->
+                    Some name
+                | _ -> None)
+              arguments
+          in
+          match (named "update", named "view") with
+          | Some update, Some view
+            when List.mem ("changes", update) tracked && List.mem ("reads", view) tracked ->
+              super#expression
+                {
+                  expression with
+                  pexp_desc =
+                    Pexp_apply
+                      ( callee,
+                        ( Labelled "tracking",
+                          [%expr
+                            {
+                              Program.changes = [%e Ast_builder.Default.evar ~loc ("__melhole_changes_" ^ update)];
+                              reads = [%e Ast_builder.Default.evar ~loc ("__melhole_reads_" ^ view)];
+                            }] )
+                        :: arguments );
+                }
+          | _ -> super#expression expression)
       | Pexp_apply (callee, arguments) -> (
           match (Element.without_jsx expression.pexp_attributes, callee.pexp_desc) with
           | None, _ -> super#expression expression

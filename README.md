@@ -42,6 +42,8 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   [dartea](https://github.com/jongleb/dartea) do. Each local the view reads is checked with one
   `===`; only the holes that read a changed one are evaluated and written. Pure views and
   immutable values make this exact: an unchanged reference is an unchanged value.
+- **Fields.** The compiler reads `update` and `view`: which model fields each message can change,
+  which fields the view reads. A message that changes nothing the view reads does not call it.
 - **Events.** `onClick=Increment` sends a message. `onInput` and `onKeyDown` take a function of
   the value or the key, `onCheck` of the checked state. Handlers are delegated to `document`.
 - **Controlled inputs.** `value` and `checked` always show the model: after typing, the field

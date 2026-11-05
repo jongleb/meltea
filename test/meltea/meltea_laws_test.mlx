@@ -170,8 +170,55 @@ let mark_view { rows; chosen; suffix } =
 let mark_init =
   { rows = List.init 6 (fun id -> { id; title = "t" ^ string_of_int id; finished = false }); chosen = None; suffix = "" }
 
+(** A model with a field the view shows and one it never reads. *)
+type split = { shown : int; hidden : int }
+
+(** What changes a split model. *)
+type poke = Show | Hide | Keep
+
+let views = ref 0
+
+let split_update message model =
+  match message with
+  | Show -> { model with shown = model.shown + 1 }
+  | Hide -> { model with hidden = model.hidden + 1 }
+  | Keep -> model
+
+let split_view { shown; _ } =
+  incr views;
+  <p>(Html.int shown)</p>
+
 let () =
   describe "Meltea laws" (fun () ->
+    test "the view runs exactly when a message changed a field it reads" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:60) (fun values ->
+             let tape = tape values in
+             views := 0;
+             let root = create_element document "div" in
+             let program =
+               Program.sandbox ~init:{ shown = 0; hidden = 0 } ~update:split_update ~view:split_view root
+             in
+             let expected = ref 1 and touched = ref false and model = ref { shown = 0; hidden = 0 } in
+             Array.iter
+               (fun _ ->
+                 match draw tape 4 with
+                 | 0 ->
+                     Program.flush program;
+                     if !touched then incr expected;
+                     touched := false
+                 | choice ->
+                     let message = [| Show; Hide; Keep |].(choice - 1) in
+                     model := split_update message !model;
+                     (match message with Show -> touched := true | Hide | Keep -> ());
+                     Program.dispatch program message)
+               values;
+             Program.flush program;
+             if !touched then incr expected;
+             let shown = text_content root in
+             Program.stop program;
+             expect (!views, shown) |. to_equal (!expected, string_of_int !model.shown)))
+        [%mel.obj { numRuns = 300 }]);
     test "rows that read outer values change exactly when those values change for them" (fun () ->
       check
         (property (tapes ~shortest:4 ~longest:60) (fun values ->

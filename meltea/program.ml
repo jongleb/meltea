@@ -3,6 +3,7 @@ open Melhole
 external queue_microtask : (unit -> unit) -> unit = "queueMicrotask"
 
 type 'msg t = { send : 'msg -> unit; draw : unit -> unit; halt : unit -> unit }
+type 'msg tracking = { changes : 'msg -> int; reads : int }
 
 (** Whether a redraw is waiting for the next microtask. *)
 type schedule = Idle | Queued
@@ -14,8 +15,8 @@ type ('model, 'msg) course = {
   halted : ('msg -> unit) -> unit;
 }
 
-let start course ~view initial root =
-  let model = ref initial and schedule = ref Idle and sink = ref ignore in
+let start course ~tracking ~view initial root =
+  let model = ref initial and schedule = ref Idle and sink = ref ignore and pending = ref 0 in
   let dispatch message = !sink message in
   let mounted =
     View.mount (Html.render (view initial) dispatch) ~parent:root ~before:None
@@ -25,12 +26,14 @@ let start course ~view initial root =
     | Idle -> ()
     | Queued ->
         schedule := Idle;
-        View.patch mounted (Html.render (view !model) dispatch);
+        if !pending land tracking.reads <> 0 then View.patch mounted (Html.render (view !model) dispatch);
+        pending := 0;
         course.drawn !model dispatch
   in
   sink :=
     (fun message ->
       model := course.step message !model dispatch;
+      pending := !pending lor tracking.changes message;
       match !schedule with
       | Queued -> ()
       | Idle ->
@@ -45,7 +48,9 @@ let start course ~view initial root =
         View.unmount mounted);
   }
 
-let element ~init ~update ~view ~subscriptions root =
+let everything = { changes = (fun _ -> -1); reads = -1 }
+
+let element ?(tracking = everything) ~init ~update ~view ~subscriptions root =
   let initial, commands = init in
   let active = Sub.activate () in
   let program =
@@ -59,16 +64,16 @@ let element ~init ~update ~view ~subscriptions root =
         drawn = (fun model dispatch -> Sub.apply active (subscriptions model) dispatch);
         halted = (fun dispatch -> Sub.apply active Sub.none dispatch);
       }
-      ~view initial root
+      ~tracking ~view initial root
   in
   Sub.apply active (subscriptions initial) program.send;
   Cmd.run commands program.send;
   program
 
-let sandbox ~init ~update ~view root =
+let sandbox ?(tracking = everything) ~init ~update ~view root =
   start
     { step = (fun message model _ -> update message model); drawn = (fun _ _ -> ()); halted = ignore }
-    ~view init root
+    ~tracking ~view init root
 
 let dispatch program message = program.send message
 let flush program = program.draw ()

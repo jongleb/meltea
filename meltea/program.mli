@@ -2,7 +2,12 @@
 
 type 'msg t
 
+(** What the compiler found in [update] and [view], as bit masks over model fields: the fields
+    each message may change and the fields the view reads. *)
+type 'msg tracking = { changes : 'msg -> int; reads : int }
+
 val sandbox :
+  ?tracking:'msg tracking ->
   init:'model ->
   update:('msg -> 'model -> 'model) ->
   view:('model -> 'msg Html.t) ->
@@ -10,6 +15,7 @@ val sandbox :
   'msg t
 
 val element :
+  ?tracking:'msg tracking ->
   init:'model * 'msg Cmd.t ->
   update:('msg -> 'model -> 'model * 'msg Cmd.t) ->
   view:('model -> 'msg Html.t) ->
