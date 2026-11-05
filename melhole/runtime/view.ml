@@ -116,6 +116,15 @@ let nothing =
 let insert (position : Template.position) node =
   Dom_api.insert_before position.parent node position.before
 
+external moving : Dom.node -> (Dom.node -> Dom.node Js.null -> unit) Js.undefined = "moveBefore" [@@mel.get]
+external move_before : Dom.node -> Dom.node -> Dom.node Js.null -> unit = "moveBefore" [@@mel.send]
+
+let move parent node before =
+  match Js.Undefined.toOption (moving parent) with
+  | None -> Dom_api.insert_before parent node before
+  | Some _ -> (
+      try move_before parent node before with Js.Exn.Error _ -> Dom_api.insert_before parent node before)
+
 (** Whether a content hole shows its children, or only remembers them for hydration's first pass. *)
 type range = Settled | Collecting
 
@@ -345,7 +354,7 @@ let keyed entries =
                   | Keep i -> update at (Array.unsafe_get items i) (Array.unsafe_get children j)
                   | Move i ->
                       let live = update at (Array.unsafe_get items i) (Array.unsafe_get children j) in
-                      live.each (fun [@u] node -> insert at node) [@u];
+                      live.each (fun [@u] node -> move at.parent node at.before) [@u];
                       live)
                 front_of
             in
@@ -494,7 +503,7 @@ let each items render project outer =
                       | Keep i -> carried at i j
                       | Move i ->
                           let live = carried at i j in
-                          live.each (fun [@u] node -> insert at node) [@u];
+                          live.each (fun [@u] node -> move at.parent node at.before) [@u];
                           live)
                     front_of
                 in
@@ -811,7 +820,7 @@ let rows (type holes item) (items : item array) (render : (item -> holes row)[@u
                   | Keep i -> carried i j
                   | Move i ->
                       let moved = carried i j in
-                      Dom_api.insert_before position.parent (root_of moved) before;
+                      move position.parent (root_of moved) before;
                       moved
                 in
                 let rows =
