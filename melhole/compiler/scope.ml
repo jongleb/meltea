@@ -35,11 +35,6 @@ class mapper =
       match expression.pexp_desc with
       | Pexp_let (flag, bindings, body) ->
           let names = List.concat_map (fun binding -> Free.bound binding.pvb_pat) bindings in
-          let bindings =
-            match flag with
-            | Recursive -> self#within names (fun () -> List.map self#value_binding bindings)
-            | Nonrecursive -> List.map self#value_binding bindings
-          in
           let defined =
             match flag with
             | Recursive -> []
@@ -50,6 +45,11 @@ class mapper =
                     | Ppat_var { txt; _ } -> Some (txt, binding.pvb_expr)
                     | _ -> None)
                   bindings
+          in
+          let bindings =
+            match flag with
+            | Recursive -> self#within names (fun () -> List.map self#value_binding bindings)
+            | Nonrecursive -> List.map self#value_binding bindings
           in
           let body =
             self#within names (fun () ->

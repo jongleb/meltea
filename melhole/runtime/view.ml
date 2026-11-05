@@ -40,6 +40,7 @@ type state =
       children : child array;  (** What each item rendered to. *)
       keys : string array;
       outer : input array;  (** What the rendering reads besides the item. *)
+      projections : input array array;  (** Per row, the parts of its rendering that read [outer]. *)
       lives : live array;
     }
       -> state
@@ -287,7 +288,7 @@ let keyed entries =
 
 let with_key key child = { child with shape = Entry (key, child) }
 
-let each items render outer =
+let each items render project outer =
   let items = Array.of_list items in
   let count = Array.length items in
   let key index child =
@@ -310,41 +311,55 @@ let each items render outer =
             Array.unsafe_set children index child;
             Array.unsafe_set keys index key)
           items;
+        let projections = Array.map (fun item -> project item [@u]) items in
         let lives = Array.map (fun child -> child.build position [@u]) children in
-        group (Each_state { items; children; keys; outer; lives }) lives);
+        group (Each_state { items; children; keys; outer; projections; lives }) lives);
     patch =
       (fun [@u] position live ->
         match live.state with
         | Each_state old ->
             let old_count = Array.length old.items in
             let children = Array.make count empty and keys = Array.make count "" in
-            let reuse index from =
-              Array.unsafe_set children index (Array.unsafe_get old.children from);
-              Array.unsafe_set keys index (Array.unsafe_get old.keys from)
-            in
-            let fill index item =
-              let child, key = rendered index item in
-              Array.unsafe_set children index child;
-              Array.unsafe_set keys index key
-            in
-            let held from item =
-              from >= 0 && from < old_count && Dom_api.same (Array.unsafe_get old.items from) item
-            in
-            (match compare_inputs old.outer outer with
-            | Changed -> Array.iteri fill items
-            | Unchanged ->
-                let shift = ref 0 in
-                Array.iteri
-                  (fun index item ->
-                    if held (index + !shift) item then reuse index (index + !shift)
-                    else if held (index + !shift + 1) item then (
-                      incr shift;
-                      reuse index (index + !shift))
-                    else if held (index + !shift - 1) item then (
-                      decr shift;
-                      reuse index (index + !shift))
-                    else fill index item)
-                  items);
+            let projections = Array.make count [||] in
+            let outer_change = compare_inputs old.outer outer in
+            let shift = ref 0 in
+            Array.iteri
+              (fun index item ->
+                let projected =
+                  match outer_change with
+                  | Unchanged -> None
+                  | Changed -> Some (project item [@u])
+                in
+                let fits from =
+                  from >= 0 && from < old_count
+                  && Dom_api.same (Array.unsafe_get old.items from) item
+                  && Option.fold ~none:true
+                       ~some:(fun projection ->
+                         match compare_inputs (Array.unsafe_get old.projections from) projection with
+                         | Unchanged -> true
+                         | Changed -> false)
+                       projected
+                in
+                let reuse from =
+                  Array.unsafe_set children index (Array.unsafe_get old.children from);
+                  Array.unsafe_set keys index (Array.unsafe_get old.keys from);
+                  Array.unsafe_set projections index
+                    (Option.value ~default:(Array.unsafe_get old.projections from) projected)
+                in
+                if fits (index + !shift) then reuse (index + !shift)
+                else if fits (index + !shift + 1) then (
+                  incr shift;
+                  reuse (index + !shift))
+                else if fits (index + !shift - 1) then (
+                  decr shift;
+                  reuse (index + !shift))
+                else (
+                  let child, key = rendered index item in
+                  Array.unsafe_set children index child;
+                  Array.unsafe_set keys index key;
+                  Array.unsafe_set projections index
+                    (match projected with Some projection -> projection | None -> project item [@u])))
+              items;
             let plan = Reconcile.plan ~old:old.keys ~next:keys in
             (match (List.compare_length_with plan.dropped old_count, extent position live) with
             | 0, Whole ->
@@ -368,7 +383,7 @@ let each items render outer =
                       live.each (fun [@u] node -> insert at node) [@u];
                       live)
             in
-            Some (group (Each_state { items; children; keys; outer; lives }) lives)
+            Some (group (Each_state { items; children; keys; outer; projections; lives }) lives)
         | _ -> None);
   }
 

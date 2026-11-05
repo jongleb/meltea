@@ -23,7 +23,8 @@ val empty : child
 val list : child list -> child
 val keyed : (string * child) list -> child
 val with_key : string -> child -> child
-val each : 'item list -> ('item -> child[@u]) -> input array -> child
+val each :
+  'item list -> ('item -> child[@u]) -> ('item -> input array[@u]) -> input array -> child
 val tpl_instance : Template.t -> hole array -> child
 val lazy1 : ('a -> child) -> 'a -> child
 val lazy2 : ('a -> 'b -> child) -> 'a -> 'b -> child

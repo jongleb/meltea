@@ -116,3 +116,69 @@ let closure ~definitions ~locals expression =
   match reads [] expression with
   | names -> expand [] names []
   | exception Unknown -> Volatile
+
+let leaves ~outer ~view body =
+  let builds expression =
+    let finder =
+      object
+        inherit [bool] Ast_traverse.fold as super
+
+        method! expression expression found =
+          found
+          || List.exists (fun attribute -> String.equal attribute.attr_name.txt "JSX") expression.pexp_attributes
+          || view expression
+          || super#expression expression found
+      end
+    in
+    finder#expression expression false
+  in
+  let rec visit local expression =
+    match of_expression expression with
+    | Volatile -> raise Unknown
+    | Reads names -> (
+        let free = List.filter (fun name -> not (List.mem name local)) names in
+        match
+          ( List.exists (fun name -> List.mem name outer) free,
+            List.exists (fun name -> List.mem name local) names || builds expression )
+        with
+        | false, _ -> []
+        | true, false -> [ expression ]
+        | true, true -> inside local expression)
+  and inside local expression =
+    let cases local branches =
+      List.concat_map
+        (fun case ->
+          let local = bound case.pc_lhs @ local in
+          Option.fold ~none:[] ~some:(visit local) case.pc_guard @ visit local case.pc_rhs)
+        branches
+    in
+    match expression.pexp_desc with
+    | Pexp_let (flag, bindings, rest) ->
+        let names = List.concat_map (fun binding -> bound binding.pvb_pat) bindings in
+        let inner = match flag with Recursive -> names @ local | Nonrecursive -> local in
+        List.concat_map (fun binding -> visit inner binding.pvb_expr) bindings @ visit (names @ local) rest
+    | Pexp_function (params, _, body) -> (
+        let local =
+          List.fold_left
+            (fun local param ->
+              match param.pparam_desc with
+              | Pparam_val (_, _, pattern) -> bound pattern @ local
+              | Pparam_newtype _ -> local)
+            local params
+        in
+        match body with Pfunction_body body -> visit local body | Pfunction_cases (branches, _, _) -> cases local branches)
+    | Pexp_match (target, branches) | Pexp_try (target, branches) -> visit local target @ cases local branches
+    | Pexp_apply (callee, arguments) ->
+        visit local callee @ List.concat_map (fun (_, argument) -> visit local argument) arguments
+    | Pexp_tuple items | Pexp_array items -> List.concat_map (visit local) items
+    | Pexp_construct (_, argument) | Pexp_variant (_, argument) ->
+        Option.fold ~none:[] ~some:(visit local) argument
+    | Pexp_record (fields, base) ->
+        List.concat_map (fun (_, value) -> visit local value) fields @ Option.fold ~none:[] ~some:(visit local) base
+    | Pexp_ifthenelse (test, yes, no) ->
+        visit local test @ visit local yes @ Option.fold ~none:[] ~some:(visit local) no
+    | Pexp_sequence (first, second) -> visit local first @ visit local second
+    | Pexp_field (target, _) | Pexp_constraint (target, _) | Pexp_coerce (target, _, _) -> visit local target
+    | _ -> raise Unknown
+  in
+  match visit [] body with leaves -> Some leaves | exception Unknown -> None

@@ -136,8 +136,71 @@ let go_to : string -> unit =
   [%mel.raw
     {|function (hash) { history.replaceState(null, "", hash); window.dispatchEvent(new Event("hashchange")); }|}]
 
+(** A list whose rows read two values from outside the row. *)
+type marked = { rows : item list; chosen : int option; suffix : string }
+
+(** What changes a marked list. *)
+type mark = Choose of int option | Suffix of string | Flip of int | Drop of int | Grow
+
+let mark_update message model =
+  match message with
+  | Choose chosen -> { model with chosen }
+  | Suffix suffix -> { model with suffix }
+  | Flip id ->
+      {
+        model with
+        rows =
+          List.map (fun item -> if item.id = id then { item with finished = not item.finished } else item) model.rows;
+      }
+  | Drop id -> { model with rows = List.filter (fun item -> item.id <> id) model.rows }
+  | Grow ->
+      let id = List.length model.rows + 100 in
+      { model with rows = model.rows @ [ { id; title = "t" ^ string_of_int id; finished = false } ] }
+
+let mark_view { rows; chosen; suffix } =
+  let row item =
+    <li
+      key=(string_of_int item.id)
+      className=(match chosen with Some id when id = item.id -> "on" | Some _ | None -> "")>
+      (Html.text (item.title ^ suffix))
+    </li>
+  in
+  <ul>(Html.list (List.map row rows))</ul>
+
+let mark_init =
+  { rows = List.init 6 (fun id -> { id; title = "t" ^ string_of_int id; finished = false }); chosen = None; suffix = "" }
+
 let () =
   describe "Meltea laws" (fun () ->
+    test "rows that read outer values change exactly when those values change for them" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:60) (fun values ->
+             let tape = tape values in
+             let root = create_element document "div" and fresh = create_element document "div" in
+             let program = Program.sandbox ~init:mark_init ~update:mark_update ~view:mark_view root in
+             let model = ref mark_init in
+             List.iter
+               (fun _ ->
+                 let ids = List.map (fun item -> item.id) !model.rows in
+                 let pick () = List.nth_opt ids (draw tape (max 1 (List.length ids))) in
+                 let message =
+                   match draw tape 5 with
+                   | 0 -> Choose (match draw tape 3 with 0 -> None | _ -> pick ())
+                   | 1 -> Suffix [| ""; "!"; "?" |].(draw tape 3)
+                   | 2 -> Option.fold ~none:Grow ~some:(fun id -> Flip id) (pick ())
+                   | 3 -> Option.fold ~none:Grow ~some:(fun id -> Drop id) (pick ())
+                   | _ -> Grow
+                 in
+                 model := mark_update message !model;
+                 Program.dispatch program message;
+                 if draw tape 2 = 0 then Program.flush program)
+               (List.init (Array.length values / 3) Fun.id);
+             Program.flush program;
+             let expected = Program.sandbox ~init:!model ~update:mark_update ~view:mark_view fresh in
+             expect (shapes (as_node root)) |. to_equal (shapes (as_node fresh));
+             Program.stop program;
+             Program.stop expected))
+        [%mel.obj { numRuns = 300 }]);
     test "after any change of subscriptions, a hash change sends exactly the current ones' messages"
       (fun () ->
         check

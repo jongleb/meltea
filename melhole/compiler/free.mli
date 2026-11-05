@@ -9,3 +9,9 @@ val of_expression : Ppxlib.expression -> t
 val closure :
   definitions:(string * Ppxlib.expression) list -> locals:string list -> Ppxlib.expression -> t
 val bound : Ppxlib.pattern -> string list
+
+val leaves :
+  outer:string list ->
+  view:(Ppxlib.expression -> bool) ->
+  Ppxlib.expression ->
+  Ppxlib.expression list option
