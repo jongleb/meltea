@@ -68,8 +68,9 @@ let render root =
       match (nodes, pending, previous) with
       | [], _, _ -> settle pending index
       | Text text :: rest, None, Static_text ->
+          marker ();
           Buffer.add_string html (escape ~quotes:`Kept text);
-          walk rest index Static_text None
+          walk rest (index + 2) Static_text None
       | Text text :: rest, Some _, Static_text ->
           marker ();
           settle pending index;
@@ -102,6 +103,56 @@ let render root =
   in
   element [] root;
   (Buffer.contents html, List.rev !holes)
+
+type 'value adoption =
+  | Enter of int list * string
+  | Leave of int list
+  | Static of int list * string
+  | Anchor of int list
+  | Slot_at of int list * slot * 'value
+
+let adoption root =
+  let steps = ref [] in
+  let emit step = steps := step :: !steps in
+  let rec element path tree =
+    emit (Enter (path, tree.tag));
+    let settle pending = Option.iter (fun (slot, value) -> emit (Slot_at (path, slot, value))) pending in
+    let rec walk nodes index previous pending =
+      match (nodes, pending, previous) with
+      | [], _, _ -> settle pending
+      | Text text :: rest, None, Static_text ->
+          emit (Anchor path);
+          emit (Static (path, text));
+          walk rest (index + 2) Static_text None
+      | Text text :: rest, Some _, Static_text ->
+          settle pending;
+          emit (Anchor path);
+          emit (Static (path, text));
+          walk rest (index + 2) Static_text None
+      | Text text :: rest, _, (Nothing | Other) ->
+          settle pending;
+          emit (Static (path, text));
+          walk rest (index + 1) Static_text None
+      | Element child :: rest, _, _ ->
+          settle pending;
+          element (path @ [ index ]) child;
+          walk rest (index + 1) Other None
+      | Slot (slot, value) :: rest, None, _ -> walk rest index previous (Some (slot, value))
+      | Slot (slot, value) :: rest, Some _, _ ->
+          settle pending;
+          emit (Anchor path);
+          walk rest (index + 1) Other (Some (slot, value))
+    in
+    (match
+       List.concat_map (fun node -> match node with Text "" -> [] | Element _ | Text _ | Slot _ -> [ node ]) tree.children
+     with
+    | [ Slot (Text_slot, _) ] -> ()
+    | children ->
+        walk children 0 Nothing None;
+        emit (Leave path))
+  in
+  element [] root;
+  List.rev !steps
 
 type step = First_of of int list | Next_of of int list
 type anchor = First_or_end of int list | Next_or_end of int list

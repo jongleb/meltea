@@ -33,7 +33,16 @@ type 'value hole =
   | At_position of int list * int * slot * 'value
       (** The parent's path and the index of the node it goes before. *)
 
+(** One step of taking over a server's nodes, in document order. *)
+type 'value adoption =
+  | Enter of int list * string  (** The element at this path; its children follow, then [Leave]. *)
+  | Leave of int list
+  | Static of int list * string  (** Static text under the element at this path. *)
+  | Anchor of int list  (** A node the template keeps between neighbours. *)
+  | Slot_at of int list * slot * 'value
+
 val void : string -> [ `Void | `Container ]
+val adoption : 'value element -> 'value adoption list
 val render : 'value element -> string * 'value hole list
 
 (** How generated code reaches a node of a clone. *)

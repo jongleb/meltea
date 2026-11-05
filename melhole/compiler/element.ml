@@ -12,6 +12,9 @@ type handler = {
 }
 
 type handlers = Closures | Linked of string
+type output = Client_only | Hydratable
+
+let output = ref Client_only
 
 type frontend = {
   name : string;
@@ -442,11 +445,101 @@ let lowercase frontend ~loc ~attributes tag arguments =
         [%expr Melhole.View.row [%e template] 0 [%e uncurried [%expr fun _ () -> ()]] ([%e key] : string)]
     | [], `Child -> Hoist.hoist ~loc "element" (frontend.wrap loc [%expr Melhole.View.static [%e markup]])
     | _ :: _, _ ->
+        let slot_names =
+          List.concat
+            (List.mapi
+               (fun index (hole : expression Markup.hole) ->
+                 match hole with
+                 | At_position _ -> [ hole_name index ]
+                 | On_element _ -> [])
+               holes)
+        in
+        let is_slot name = List.exists (String.equal name) slot_names in
+        let from name = "__melhole_from" ^ name in
+        let cursor indices =
+          "__melhole_cursor" ^ String.concat "" (List.map (fun index -> "_" ^ string_of_int index) indices)
+        in
+        let parent indices = List.filteri (fun at _ -> at < List.length indices - 1) indices in
+        let hole_of value =
+          let rec find index holes =
+            match holes with
+            | [] -> Location.raise_errorf ~loc "%s: a slot without a hole" frontend.name
+            | (hole : expression Markup.hole) :: rest -> (
+                match hole with
+                | At_position (_, _, _, other) when other == value -> index
+                | At_position _ | On_element _ -> find (index + 1) rest)
+          in
+          find 0 holes
+        in
+        let finished =
+          tuple (List.map (fun (named, creator) -> match is_slot named with true -> evar ~loc named | false -> creator) creators)
+        in
+        let adopting =
+          List.fold_right
+            (fun (step : expression Markup.adoption) body ->
+              match step with
+              | Enter ([], _) -> [%expr let [%p pvar ~loc (cursor [])] = Melhole.View.inside __melhole_node in [%e body]]
+              | Enter (indices, tag) ->
+                  [%expr
+                    let [%p pvar ~loc (name indices)] =
+                      Melhole.View.adopt_element [%e evar ~loc (cursor (parent indices))] [%e estring ~loc tag]
+                    in
+                    let [%p pvar ~loc (cursor indices)] = Melhole.View.inside [%e node indices] in
+                    [%e body]]
+              | Leave indices -> [%expr Melhole.View.adopt_finish [%e evar ~loc (cursor indices)]; [%e body]]
+              | Static (indices, text) ->
+                  [%expr Melhole.View.adopt_static [%e evar ~loc (cursor indices)] [%e estring ~loc text]; [%e body]]
+              | Anchor indices -> [%expr Melhole.View.adopt_anchor [%e evar ~loc (cursor indices)]; [%e body]]
+              | Slot_at (indices, Text_slot, value) ->
+                  let named = hole_name (hole_of value) in
+                  [%expr
+                    let [%p pvar ~loc named] =
+                      Melhole.View.adopt_text [%e evar ~loc (cursor indices)]
+                        (Melhole.View.collected_text [%e evar ~loc (from named)])
+                    in
+                    [%e body]]
+              | Slot_at (indices, Child_slot, value) ->
+                  let named = hole_name (hole_of value) in
+                  [%expr
+                    let [%p pvar ~loc named] =
+                      Melhole.View.adopt_content __melhole_scope [%e evar ~loc (cursor indices)]
+                        (Melhole.View.collected [%e evar ~loc (from named)])
+                    in
+                    [%e body]])
+            (Markup.adoption element) finished
+        in
+        let collected_pattern =
+          match
+            List.map (fun (named, _) -> match is_slot named with true -> pvar ~loc (from named) | false -> ppat_any ~loc) creators
+          with
+          | [ single ] -> single
+          | patterns -> ppat_tuple ~loc patterns
+        in
+        let adopt =
+          lazy
+          (pexp_record ~loc
+            [
+              ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I3"); loc },
+                [%expr
+                  fun __melhole_scope __melhole_node __melhole_collected ->
+                    (let [%p collected_pattern] = __melhole_collected in
+                     [%e adopting])
+                    [@ocaml.warning "-26-27"]] );
+            ]
+            None)
+        in
         let template =
           Hoist.hoist ~loc "template"
-            [%expr
-              Melhole.View.template [%e markup]
-                [%e uncurried [%expr fun __melhole_scope [%p pvar ~loc (name [])] -> [%e made]]]]
+            (match !output with
+            | Hydratable ->
+                [%expr
+                  Melhole.View.hydratable [%e markup]
+                    [%e uncurried [%expr fun __melhole_scope [%p pvar ~loc (name [])] -> [%e made]]]
+                    [%e Lazy.force adopt]]
+            | Client_only ->
+                [%expr
+                  Melhole.View.template [%e markup]
+                    [%e uncurried [%expr fun __melhole_scope [%p pvar ~loc (name [])] -> [%e made]]]])
         in
         let holes =
           match List.map (fun (name, _) -> pvar ~loc name) creators with

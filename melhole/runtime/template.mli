@@ -14,9 +14,6 @@ type ('element, 'position) hole =
 (** Where inserted content goes: before [before], or appended to [parent]. *)
 type position = { parent : Dom.node; before : Dom.node Js.null }
 
-val opening : string
-val closing : string
-val marker : Dom.node Js.null -> string -> Dom.node option
 
 type t
 
@@ -30,6 +27,8 @@ val make : html:string -> holes:(int list, int list * int) hole array -> t
 (** A hand-written template whose holes are given by paths. *)
 
 val clone : t -> Dom.element
+val parsed : t -> Dom.element
+val paths : t -> (int list, int list * int) hole array
 val tag : t -> string
 
 val locate : t -> Dom.node -> (Dom.element, position) hole array

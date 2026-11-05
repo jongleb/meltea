@@ -56,7 +56,9 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
 - **Controlled inputs.** `value` and `checked` always show the model: after typing, the field
   gets the model's value back if the update did not take the input.
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
-- **Server.** `Program.render` writes HTML, `~start:Program.hydrate` takes it over in the browser.
+- **Server.** `Program.render` writes HTML in React's format, `~start:Program.hydrate` takes it over
+  in the browser; compile with `(pps melange.ppx meltea-ppx -hydratable)` to include the code that
+  does it.
 - **Transitions.** `Html.transition ~name` and `Html.transition_group ~name` animate what enters,
   leaves and moves with CSS classes, as Vue's `<Transition>` and `<TransitionGroup>`.
 

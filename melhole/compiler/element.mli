@@ -41,6 +41,10 @@ type frontend = {
       (** A keyed loop for a child that maps a row function over a list. *)
 }
 
+(** Whether compiled templates can take over a server's HTML; the [-hydratable] flag of the ppx. *)
+type output = Client_only | Hydratable
+
+val output : output ref
 val without_jsx : Ppxlib.attributes -> Ppxlib.attributes option
 val list_items : Ppxlib.expression -> Ppxlib.expression list option
 

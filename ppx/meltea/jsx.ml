@@ -285,4 +285,9 @@ let mapper =
   end
 
 let structure items = mapper#structure items
+let () =
+  Driver.add_arg "-hydratable"
+    (Arg.Unit (fun () -> Element.output := Element.Hydratable))
+    ~doc:" compile templates that can take over server-rendered HTML"
+
 let () = Driver.register_transformation "meltea" ~impl:structure

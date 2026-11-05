@@ -93,7 +93,12 @@ type 'holes template = {
   holes : (scope -> Dom.node -> 'holes[@u]);
   mutable lent : 'holes option;  (** The holes of a mounted clone, handed over to one refresh. *)
   witness : 'holes Witness.t;  (** Proves that holes made by this template have its type. *)
+  adopt : 'holes adoptable;
 }
+
+(** How a compiled template takes over a server's nodes: given its holes on a first, unplaced
+    clone, it makes its holes on the server's element. *)
+and 'holes adoptable = Not_hydratable | Adopts of (scope -> Dom.node -> 'holes -> 'holes[@u])
 
 (** One row of a compiled loop before it is mounted: its template, how to write its holes, its key. *)
 type 'holes row = { template : 'holes template; slots : int; refresh : (scope -> 'holes -> unit[@u]); key : string }
@@ -110,16 +115,19 @@ let nothing =
 let insert (position : Template.position) node =
   Dom_api.insert_before position.parent node position.before
 
-(** Whether a content hole still has the server's markers around its place. *)
-type range = Settled | Closing_at of Dom.node
+(** Whether a content hole shows its children, or only remembers them for hydration's first pass. *)
+type range = Settled | Collecting
 
-(** How children reach the DOM: built in the browser, written by a server, or adopted from its HTML. *)
+(** Where a medium's nodes come from. *)
+type adoption = Fresh_nodes | Server_nodes
+
+(** How children reach the DOM: built in the browser, or adopted from the server's HTML. *)
 type medium = {
-  text : (Template.position -> string option -> Dom.text[@u]);  (** [None] keeps a text already there. *)
+  adoption : adoption;
+  text : (Template.position -> string option -> Dom.text[@u]);  (** [None]: the text is written later. *)
   root : (Template.position -> Template.t -> Dom.element[@u]);
   placed : (Template.position -> Dom.element -> unit[@u]);
-  opened : (Template.position -> range[@u]);  (** Where a content hole's children go. *)
-  closed : (Dom.node -> Dom.node -> range[@u]);  (** After a hole's first children, before its closing marker. *)
+  opened : (Template.position -> range[@u]);  (** What a new content hole does with its children. *)
   built :
     'made.
     (int ->
@@ -127,11 +135,13 @@ type medium = {
     (int -> Template.position -> 'made[@u]) ->
     ('made -> Dom.node Js.null -> Dom.node Js.null[@u]) ->
     'made array[@u]);
+      (** Makes children in order; the last argument gives the node after one, from where it started. *)
   aside : ((unit -> live[@u]) -> live[@u]);  (** Children that live elsewhere, like a portal's. *)
 }
 
 let browser =
   {
+    adoption = Fresh_nodes;
     text =
       (fun [@u] position value ->
         let node = Dom_api.create_text_node Dom_api.document (Option.value ~default:"" value) in
@@ -140,7 +150,6 @@ let browser =
     root = (fun [@u] _ markup -> Template.clone markup);
     placed = (fun [@u] position root -> insert position root);
     opened = (fun [@u] _ -> Settled);
-    closed = (fun [@u] _ _ -> Settled);
     built =
       (fun [@u] count position make _ ->
         match count with
@@ -233,6 +242,12 @@ let backwards count (position : Template.position) make front =
 
 let front_of = fun [@u] (live : live) after -> live.front after [@u]
 
+let after_of =
+ fun [@u] (live : live) start ->
+  let last = ref Js.null in
+  live.each (fun [@u] node -> last := Js.Null.return node) [@u];
+  match Js.Null.toOption !last with None -> start | Some node -> Dom_api.following_sibling node
+
 let text value =
   {
     shape = Single;
@@ -269,7 +284,7 @@ let many children =
     build =
       (fun [@u] position ->
         let children = Array.of_list children in
-        let items = !medium.built (Array.length children) position (fun [@u] index at -> (Array.unsafe_get children index).build at [@u]) front_of [@u] in
+        let items = !medium.built (Array.length children) position (fun [@u] index at -> (Array.unsafe_get children index).build at [@u]) after_of [@u] in
         group (List_state items) items);
     patch =
       (fun [@u] position live ->
@@ -297,7 +312,7 @@ let keyed entries =
     shape = Entries entries;
     build =
       (fun [@u] position ->
-        let items = !medium.built (Array.length children) position (fun [@u] index at -> (Array.unsafe_get children index).build at [@u]) front_of [@u] in
+        let items = !medium.built (Array.length children) position (fun [@u] index at -> (Array.unsafe_get children index).build at [@u]) after_of [@u] in
         group (Keyed_state (keys, items)) items);
     patch =
       (fun [@u] position live ->
@@ -348,7 +363,7 @@ let each items render project outer =
               let child, key = rendered index (Array.unsafe_get items index) in
               Array.unsafe_set keys index key;
               child.build at [@u])
-            front_of [@u]
+            after_of [@u]
         in
         let projections = Array.map (fun item -> project item [@u]) items in
         group (Each_state { items; keys; outer; projections; lives }) lives);
@@ -564,22 +579,63 @@ let place position root scope state =
 let unset = Input (ref ())
 let fresh count = { deps = Array.make count unset; cleanups = []; references = []; placement = Detached }
 
-let template markup holes = { markup; holes; lent = None; witness = Witness.make () }
+let template markup holes = { markup; holes; lent = None; witness = Witness.make (); adopt = Not_hydratable }
+
+let hydratable markup holes adopt = { markup; holes; lent = None; witness = Witness.make (); adopt = Adopts adopt }
+
+let mismatch () = Js.Exn.raiseError "melhole: the HTML from the server does not match the view"
+
+let found node =
+  match Js.Null.toOption node with
+  | None -> "nothing"
+  | Some node -> (
+      match Dom_api.node_type node with
+      | 1 -> "<" ^ String.lowercase_ascii (Dom_api.node_name node) ^ ">"
+      | 3 -> "the text \"" ^ Dom_api.data node ^ "\""
+      | _ -> "a comment")
+
+let expected what node =
+  Js.Exn.raiseError ("melhole: the HTML from the server does not match the view: expected " ^ what ^ ", found " ^ found node)
+
+let collecting = { browser with opened = (fun [@u] _ -> Collecting) }
+
+let adopted template slots refresh (position : Template.position) =
+  match template.adopt with
+  | Not_hydratable -> mismatch ()
+  | Adopts adopt ->
+      let root = !medium.root position template.markup [@u] in
+      let serving = !medium in
+      medium := collecting;
+      let clone = Template.clone template.markup in
+      let first = fresh slots in
+      let collected = template.holes first (Dom_api.to_node clone) [@u] in
+      refresh first collected [@u];
+      medium := serving;
+      let scope = fresh slots in
+      let holes = adopt scope (Dom_api.to_node root) collected [@u] in
+      refresh scope holes [@u];
+      (root, scope, holes)
 
 let row template slots refresh key = { template; slots; refresh; key }
 
 let rows (type holes item) (items : item array) (render : (item -> holes row)[@u]) project outer =
   let count = Array.length items in
   let mount (position : Template.position) parts =
-    let root = !medium.root position parts.template.markup [@u] in
-    let scope = fresh parts.slots in
-    let holes = parts.template.holes scope (Dom_api.to_node root) [@u] in
-    parts.refresh scope holes [@u];
-    settle position root scope;
-    Mounted_row { root; scope; holes; witness = parts.template.witness }
+    match !medium.adoption with
+    | Fresh_nodes ->
+        let root = !medium.root position parts.template.markup [@u] in
+        let scope = fresh parts.slots in
+        let holes = parts.template.holes scope (Dom_api.to_node root) [@u] in
+        parts.refresh scope holes [@u];
+        settle position root scope;
+        Mounted_row { root; scope; holes; witness = parts.template.witness }
+    | Server_nodes ->
+        let root, scope, holes = adopted parts.template parts.slots parts.refresh position in
+        settle position root scope;
+        Mounted_row { root; scope; holes; witness = parts.template.witness }
   in
   let root_of (Mounted_row row) = Dom_api.to_node row.root in
-  let front = fun [@u] row _ -> Js.Null.return (root_of row) in
+  let after = fun [@u] row _ -> Dom_api.following_sibling (root_of row) in
   let shown items keys projections rows =
     {
       state = Rows_state { items; keys; outer; projections; rows };
@@ -610,7 +666,7 @@ let rows (type holes item) (items : item array) (render : (item -> holes row)[@u
               let parts = render (Array.unsafe_get items index) [@u] in
               Array.unsafe_set keys index parts.key;
               mount at parts)
-            front [@u]
+            after [@u]
         in
         let projections = Array.make count [||] in
         for index = 0 to count - 1 do
@@ -758,10 +814,16 @@ let compiled template count refresh =
     shape = Single;
     build =
       (fun [@u] position ->
-        let root = !medium.root position template.markup [@u] in
-        let scope = fresh count in
-        let holes = template.holes scope (Dom_api.to_node root) [@u] in
-        refresh scope holes [@u];
+        let root, scope, holes =
+          match !medium.adoption with
+          | Fresh_nodes ->
+              let root = !medium.root position template.markup [@u] in
+              let scope = fresh count in
+              let holes = template.holes scope (Dom_api.to_node root) [@u] in
+              refresh scope holes [@u];
+              (root, scope, holes)
+          | Server_nodes -> adopted template count refresh position
+        in
         place position root scope
           (Compiled_state
              { identity = Input template; scope; lend = (fun [@u] () -> template.lent <- Some holes) }));
@@ -815,7 +877,7 @@ module Hole = struct
     position : Template.position;
     mutable source : child;
     mutable live : live;
-    mutable range : range;
+    range : range;
   }
 end
 
@@ -992,10 +1054,74 @@ let set_content (hole : Hole.content) child =
   | Settled, false ->
       hole.live <- update hole.position hole.live child;
       hole.source <- child
-  | Closing_at closing, _ ->
-      hole.live <- child.build { hole.position with before = Js.Null.return closing } [@u];
-      hole.source <- child;
-      hole.range <- !medium.closed hole.position.parent closing [@u]
+  | Collecting, _ -> hole.source <- child
+
+(** Where hydration has got to among one parent's children. *)
+type cursor = { parent : Dom.node; mutable at : Dom.node Js.null }
+
+let inside node = { parent = node; at = Dom_api.first_child_or_end node }
+
+let separated node =
+  match Js.Null.toOption node with
+  | Some found when Dom_api.node_type found = 8 && String.equal (Dom_api.data found) " " ->
+      Dom_api.following_sibling found
+  | Some _ | None -> node
+
+let adopt_element cursor tag =
+  match Js.Null.toOption cursor.at with
+  | Some node
+    when Dom_api.node_type node = 1
+         && String.equal (String.lowercase_ascii (Dom_api.node_name node)) (String.lowercase_ascii tag) ->
+      cursor.at <- Dom_api.following_sibling node;
+      node
+  | Some _ | None -> expected ("<" ^ tag ^ ">") cursor.at
+
+let adopt_static cursor text =
+  match Js.Null.toOption (separated cursor.at) with
+  | Some node when Dom_api.node_type node = 3 && String.equal (Dom_api.data node) text ->
+      cursor.at <- Dom_api.following_sibling node
+  | Some _ | None -> expected ("the text \"" ^ text ^ "\"") (separated cursor.at)
+
+let adopt_anchor cursor =
+  match Js.Null.toOption cursor.at with
+  | Some node when Dom_api.node_type node = 8 -> cursor.at <- Dom_api.following_sibling node
+  | Some _ | None ->
+      Dom_api.insert_before cursor.parent (Dom_api.create_text_node Dom_api.document "") cursor.at
+
+let adopt_text cursor value =
+  match (value, Js.Null.toOption (separated cursor.at)) with
+  | "", _ ->
+      let node = Dom_api.create_text_node Dom_api.document "" in
+      Dom_api.insert_before cursor.parent node cursor.at;
+      node
+  | _, Some node when Dom_api.node_type node = 3 ->
+      cursor.at <- Dom_api.following_sibling node;
+      if not (String.equal (Dom_api.data node) value) then Dom_api.set_data (Dom_api.unsafe_text node) value;
+      Dom_api.unsafe_text node
+  | _, (Some _ | None) -> expected ("the text \"" ^ value ^ "\"") (separated cursor.at)
+
+let adopt_content scope cursor child =
+  let live = child.build { Template.parent = cursor.parent; before = cursor.at } [@u] in
+  cursor.at <- after_of live cursor.at [@u];
+  let hole : Hole.content =
+    { position = { parent = cursor.parent; before = cursor.at }; source = child; live; range = Settled }
+  in
+  scope.cleanups <- (fun [@u] () -> hole.live.release () [@u]) :: scope.cleanups;
+  hole
+
+let adopt_finish cursor =
+  let rec rest node =
+    match Js.Null.toOption node with
+    | None -> ()
+    | Some found -> (
+        match (Dom_api.node_type found, Dom_api.data found) with
+        | 8, _ | 3, "" -> rest (Dom_api.following_sibling found)
+        | _, _ -> expected "the end of an element" node)
+  in
+  rest cursor.at
+
+let collected (hole : Hole.content) = hole.source
+let collected_text node = Dom_api.data (Dom_api.to_node node)
 
 (** A hole of a hand-written template. *)
 type site =
@@ -1035,10 +1161,75 @@ let tpl_instance markup values =
             mismatch ())
       sites values
   in
+  let adopt_instance (position : Template.position) =
+    let root = !medium.root position markup [@u] in
+    let scope = fresh 0 in
+    let paths = Template.paths markup in
+    let elements = ref [] in
+    let adopted = Array.make (Array.length paths) None in
+    let slot cursor index =
+      Array.unsafe_set adopted index
+        (match (Array.unsafe_get paths index, Array.unsafe_get values index) with
+        | Text _, HText text -> Some (Text_hole { node = adopt_text cursor text; value = text })
+        | Child _, HChild child -> Some (Content_hole (adopt_content scope cursor child))
+        | _, _ -> mismatch ())
+    in
+    let rec walk shape server path =
+      elements := (path, server) :: !elements;
+      let cursor = inside (Dom_api.to_node server) in
+      let rec step node index =
+        Array.iteri
+          (fun at hole ->
+            match hole with
+            | Template.Text (parent, before) | Child (parent, before)
+              when before = index && List.equal Int.equal parent path ->
+                slot cursor at
+            | Text _ | Child _ | Attr _ | Prop _ | Handler _ | Ref _ | Style _ | Class_list _ -> ())
+          paths;
+        Option.iter
+          (fun current ->
+            (match (Dom_api.node_type current, Dom_api.data current) with
+            | 1, _ ->
+                walk current (adopt_element cursor (Dom_api.node_name current)) (path @ [ index ])
+            | 3, "" | 8, _ -> adopt_anchor cursor
+            | _, text -> adopt_static cursor text);
+            step (Dom_api.next_sibling current) (index + 1))
+          node
+      in
+      step (Dom_api.first_child (Dom_api.to_node shape)) 0;
+      adopt_finish cursor
+    in
+    walk (Dom_api.to_node (Template.parsed markup)) (Dom_api.to_node root) [];
+    let at path =
+      Template.element
+        (Option.get
+           (List.find_map
+              (fun (known, server) -> match List.equal Int.equal known path with true -> Some server | false -> None)
+              !elements))
+    in
+    let sites =
+      Array.mapi
+        (fun index hole ->
+          match (hole : (int list, int list * int) Template.hole) with
+          | Text _ | Child _ -> Option.get (Array.unsafe_get adopted index)
+          | Attr (path, name) -> Attr_hole (attr_hole (at path) name)
+          | Prop (path, name) -> Prop_hole (prop_hole (at path) name)
+          | Handler (path, event) -> Handler_hole (handler_hole scope (at path) event)
+          | Ref path -> Reference_hole (reference_hole scope (at path))
+          | Style path -> Style_hole (style_hole (at path))
+          | Class_list path -> Class_hole (classes_hole (at path)))
+        paths
+    in
+    refresh sites values;
+    place position root scope (Paths_state (markup, refresh sites))
+  in
   {
     shape = Single;
     build =
       (fun [@u] position ->
+        match !medium.adoption with
+        | Server_nodes -> adopt_instance position
+        | Fresh_nodes ->
         let root = !medium.root position markup [@u] in
         let scope = fresh 0 in
         let sites =
@@ -1079,6 +1270,11 @@ let patch mounted child =
   if not (Dom_api.same mounted.source child) then (
     mounted.live <- update mounted.position mounted.live child;
     mounted.source <- child)
+
+let mount_over child ~parent =
+  let parent = Dom_api.to_node parent in
+  let position = { Template.parent; before = Js.null } in
+  { position; source = child; live = child.build { position with before = Dom_api.first_child_or_end parent } [@u] }
 
 let unmount mounted =
   remove mounted.position mounted.live;

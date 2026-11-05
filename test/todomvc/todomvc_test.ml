@@ -277,7 +277,7 @@ let () =
                  fields Todomvc.Ignore )
              |. to_equal (true, 0)))
         [%mel.obj { numRuns = 300 }]);
-    test_async "hydrating the server's page shows the same page, creates no element, and keeps working" (fun () ->
+    test_async "hydrating the server's page shows the same page with the server's own elements, and keeps working" (fun () ->
       check_async
         (async_property (tapes ~shortest:10 ~longest:60) (fun values ->
              let tape = tape values in
@@ -300,15 +300,16 @@ let () =
              in
              let served = attached () and fresh = attached () in
              set_inner_html served (Program.render ~view:Todomvc.view model);
-             let creates = spy_on document_prototype "createElement" in
-             let clones = spy_on node_prototype "cloneNode" in
+             let sent = nodes (select_all served "*") in
              let hydrated =
                Program.element ~start:Program.hydrate ~init:(model, Cmd.none) ~update:Todomvc.update ~view:Todomvc.view
                  ~subscriptions:Todomvc.subscriptions served
              in
-             let created = Array.length (calls (mock creates)) + Array.length (calls (mock clones)) in
-             restore creates;
-             restore clones;
+             let present = nodes (select_all served "*") in
+             let created =
+               Array.length (Js.Array.filter ~f:(fun node -> not (Array.exists (fun other -> same node other) sent)) present)
+               + Array.length (Js.Array.filter ~f:(fun node -> not (Array.exists (fun other -> same node other) present)) sent)
+             in
              let mounted =
                Program.element ~init:(model, Cmd.none) ~update:Todomvc.update ~view:Todomvc.view
                  ~subscriptions:Todomvc.subscriptions fresh

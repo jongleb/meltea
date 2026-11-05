@@ -48,6 +48,9 @@ val items : child -> child list
 type change = Changed | Unchanged
 
 val template : Template.t -> (scope -> Dom.node -> 'holes[@u]) -> 'holes template
+
+val hydratable :
+  Template.t -> (scope -> Dom.node -> 'holes[@u]) -> (scope -> Dom.node -> 'holes -> 'holes[@u]) -> 'holes template
 val compiled : 'holes template -> int -> (scope -> 'holes -> unit[@u]) -> child
 val static : Template.t -> child
 val check : scope -> int -> 'a -> change
@@ -68,16 +71,19 @@ type live = private {
 
 val nothing : live
 
-(** Whether a content hole still has the server's markers around its place. *)
-type range = Settled | Closing_at of Dom.node
+(** Whether a content hole shows its children, or only remembers them for hydration's first pass. *)
+type range = Settled | Collecting
 
-(** How children reach the DOM: built in the browser, written by a server, or adopted from its HTML. *)
+(** Where a medium's nodes come from. *)
+type adoption = Fresh_nodes | Server_nodes
+
+(** How children reach the DOM: built in the browser, or adopted from the server's HTML. *)
 type medium = {
-  text : (Template.position -> string option -> Dom.text[@u]);  (** [None] keeps a text already there. *)
+  adoption : adoption;
+  text : (Template.position -> string option -> Dom.text[@u]);  (** [None]: the text is written later. *)
   root : (Template.position -> Template.t -> Dom.element[@u]);
   placed : (Template.position -> Dom.element -> unit[@u]);
-  opened : (Template.position -> range[@u]);  (** Where a content hole's children go. *)
-  closed : (Dom.node -> Dom.node -> range[@u]);  (** After a hole's first children, before its closing marker. *)
+  opened : (Template.position -> range[@u]);  (** What a new content hole does with its children. *)
   built :
     'made.
     (int ->
@@ -85,6 +91,7 @@ type medium = {
     (int -> Template.position -> 'made[@u]) ->
     ('made -> Dom.node Js.null -> Dom.node Js.null[@u]) ->
     'made array[@u]);
+      (** Makes children in order; the last argument gives the node after one, from where it started. *)
   aside : ((unit -> live[@u]) -> live[@u]);  (** Children that live elsewhere, like a portal's. *)
 }
 
@@ -154,8 +161,24 @@ val set_content : Hole.content -> child -> unit
 
 type mounted
 
+(** Where hydration has got to among one parent's children. *)
+type cursor
+
+val mismatch : unit -> 'a
+val inside : Dom.node -> cursor
+val adopt_element : cursor -> string -> Dom.node
+val adopt_static : cursor -> string -> unit
+val adopt_anchor : cursor -> unit
+val adopt_text : cursor -> string -> Dom.text
+val adopt_content : scope -> cursor -> child -> Hole.content
+val adopt_finish : cursor -> unit
+val collected : Hole.content -> child
+val collected_text : Dom.text -> string
+val after_of : (live -> Dom.node Js.null -> Dom.node Js.null[@u])
+
 val mount :
   child -> parent:'a Dom.node_like -> before:'b Dom.node_like option -> mounted
 
+val mount_over : child -> parent:'a Dom.node_like -> mounted
 val patch : mounted -> child -> unit
 val unmount : mounted -> unit
