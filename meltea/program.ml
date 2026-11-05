@@ -12,8 +12,8 @@ type 'msg tracking = { changes : 'msg -> int; reads : int }
 
 external same : 'a -> 'b -> bool = "%eq"
 
-(** Whether a redraw is waiting for the next microtask. *)
-type schedule = Idle | Queued
+(** When the next redraw is due: none, at the next microtask, or at the next frame. *)
+type schedule = Idle | Queued | Framed
 
 (** How a program takes over its root: empty, or holding the server's HTML of the first model. *)
 type start = { take : View.child -> Dom.element -> View.mounted }
@@ -37,7 +37,7 @@ let launch course ~tracking ~mode ~view initial root =
   let draw () =
     match !schedule with
     | Idle -> ()
-    | Queued ->
+    | Queued | Framed ->
         schedule := Idle;
         if !pending land tracking.reads <> 0 then View.patch mounted (Html.render (view !model) dispatch);
         pending := 0;
@@ -47,9 +47,12 @@ let launch course ~tracking ~mode ~view initial root =
     (fun message ->
       model := course.step message !model dispatch;
       pending := !pending lor tracking.changes message;
-      match !schedule with
-      | Queued -> ()
-      | Idle ->
+      match (!schedule, !Events.pace) with
+      | Queued, _ | Framed, Continuous -> ()
+      | Idle, Continuous ->
+          schedule := Framed;
+          Dom_api.request_animation_frame (fun _ -> draw ())
+      | (Idle | Framed), Discrete ->
           schedule := Queued;
           queue_microtask draw);
   {

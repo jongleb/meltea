@@ -6,6 +6,12 @@ type registration =
   | Delegated  (** Nothing: one [document] listener serves every element. *)
   | Direct of (unit -> unit)  (** Removes the element's own listener. *)
 
+(** How often a kind of event fires: once per action, or many times a frame (pointer moves, scroll). *)
+type pace = Discrete | Continuous
+
+(** The pace of the event whose handlers are running; [Discrete] outside handlers. *)
+val pace : pace ref
+
 val bind : Dom.element -> string -> string * registration
 
 val set : Dom.element -> string -> (Dom.event -> unit) -> unit

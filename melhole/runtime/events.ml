@@ -1,4 +1,18 @@
 type registration = Delegated | Direct of (unit -> unit)
+type pace = Discrete | Continuous
+
+let pace = ref Discrete
+
+let paced event handle native =
+  match event with
+  | "mousemove" | "pointermove" | "touchmove" | "scroll" | "wheel" | "drag" | "dragover" ->
+      pace := Continuous;
+      (match handle native with
+      | () -> pace := Discrete
+      | exception error ->
+          pace := Discrete;
+          raise error)
+  | _ -> handle native
 
 let keys = ref []
 let deliveries = ref []
@@ -38,7 +52,7 @@ let bind element event =
                         ()
                     | (`Mouse | `Other), _ ->
                         Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
-                        handle native)
+                        paced event handle native)
                   (Dom_api.handler node key);
                 match Dom_api.cancel_bubble native with
                 | true -> ()
@@ -52,7 +66,7 @@ let bind element event =
         Delegated
     | _ ->
         let listener native =
-          Option.iter (fun handle -> handle native) (Dom_api.handler (Dom_api.to_node element) key)
+          Option.iter (fun handle -> paced event handle native) (Dom_api.handler (Dom_api.to_node element) key)
         in
         Dom_api.add_listener element event listener;
         Direct (fun () -> Dom_api.remove_listener element event listener)

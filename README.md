@@ -64,6 +64,9 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   the value or the key, `onCheck` of the checked state. Handlers are delegated to `document`.
 - **Controlled inputs.** `value` and `checked` always show the model: after typing, the field
   gets the model's value back if the update did not take the input.
+- **Pacing.** A message sent by a click or a key is drawn at the next microtask; messages sent by
+  pointer moves, scroll and wheel are drawn once per frame, as the Elm runtime does, and a click
+  in between draws at once.
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
 - **Server.** `Program.render` writes HTML in React's format, `~start:Program.hydrate` takes it over
   in the browser; compile with `(pps melange.ppx meltea-ppx -hydratable)` to include the code that

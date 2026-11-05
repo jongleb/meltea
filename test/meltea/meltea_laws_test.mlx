@@ -631,3 +631,86 @@ let () =
            Program.stop program;
            expect !seen |. to_equal [ (id, Remove id) ]))
         [%mel.obj { numRuns = 100 }]))
+
+(** What the paced counter has seen. *)
+type paced = { moves : int; clicks : int }
+
+(** A message of the paced counter. *)
+type pacing = Moved | Clicked
+
+(** One step of a paced run. *)
+type pace_step = Move | Click | Tick | Frame
+
+external test_async : string -> (unit -> unit Js.Promise.t) -> unit = "test"
+external remove_root : Dom.element -> unit = "remove" [@@mel.send]
+
+let stub_frames : unit -> unit =
+  [%mel.raw {|function () { globalThis.__frames = []; globalThis.requestAnimationFrame = function (f) { globalThis.__frames.push(f); return 0; }; }|}]
+
+let run_frames : unit -> unit =
+  [%mel.raw {|function () { var due = globalThis.__frames; globalThis.__frames = []; due.forEach(function (f) { f(0); }); }|}]
+
+let tick : unit -> unit Js.Promise.t = [%mel.raw {|function () { return new Promise(function (done) { setTimeout(done, 0); }); }|}]
+external pointer : string -> < bubbles : bool > Js.t -> Dom.event = "Event" [@@mel.new]
+external dispatch_on : Dom.element -> Dom.event -> unit = "dispatchEvent" [@@mel.send]
+
+let ( let* ) promise next = Js.Promise.then_ next promise
+
+let () =
+  describe "Meltea pacing" (fun () ->
+    test_async "pointer moves draw once a frame, a click draws at the next microtask, and the page is the view of what was drawn" (fun () ->
+      stub_frames ();
+      check_async
+        (async_property (tapes ~shortest:4 ~longest:40) (fun values ->
+           let tape = tape values in
+           let steps = List.init (4 + draw tape 20) (fun _ -> [| Move; Move; Click; Tick; Frame |].(draw tape 5)) in
+           let calls = ref 0 in
+           let view model =
+             incr calls;
+             <div className="area" onPointerMove=Moved>
+               (Html.int model.moves)(Html.text "/")(Html.int model.clicks)
+               <button onClick=Clicked>(Html.text "c")</button>
+             </div>
+           in
+           let update message model =
+             match message with Moved -> { model with moves = model.moves + 1 } | Clicked -> { model with clicks = model.clicks + 1 }
+           in
+           let root = attached () in
+           let program = Program.sandbox ~init:{ moves = 0; clicks = 0 } ~update ~view root in
+           let area = select root ".area" in
+           let shown () = text_content area in
+           let rec go remaining current drawn schedule draws agreed =
+             let text model = string_of_int model.moves ^ "/" ^ string_of_int model.clicks ^ "c" in
+             match remaining with
+             | [] -> Js.Promise.resolve (draws, agreed, !calls)
+             | step :: rest -> (
+                 match step with
+                 | Move ->
+                     dispatch_on area (pointer "pointermove" [%mel.obj { bubbles = true }]);
+                     let current = update Moved current in
+                     go rest current drawn (match schedule with `Idle -> `Framed | other -> other) draws agreed
+                 | Click ->
+                     click (select root "button");
+                     go rest (update Clicked current) drawn `Queued draws agreed
+                 | Tick ->
+                     let* () = tick () in
+                     let drawn, schedule, draws =
+                       match schedule with `Queued -> (current, `Idle, draws + 1) | (`Idle | `Framed) as other -> (drawn, other, draws)
+                     in
+                     go rest current drawn schedule draws (agreed && String.equal (shown ()) (text drawn))
+                 | Frame ->
+                     let* () = tick () in
+                     run_frames ();
+                     let drawn, schedule, draws =
+                       match schedule with `Framed | `Queued -> (current, `Idle, draws + 1) | `Idle -> (drawn, `Idle, draws)
+                     in
+                     go rest current drawn schedule draws (agreed && String.equal (shown ()) (text drawn)))
+           in
+           let* draws, agreed, made = go steps { moves = 0; clicks = 0 } { moves = 0; clicks = 0 } `Idle 1 true in
+           let* () = tick () in
+           run_frames ();
+           Program.stop program;
+           remove_root root;
+           expect (made, agreed) |. to_equal (draws, true);
+           Js.Promise.resolve ()))
+        [%mel.obj { numRuns = 100 }]))
