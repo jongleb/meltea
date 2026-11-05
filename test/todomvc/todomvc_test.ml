@@ -248,6 +248,33 @@ let () =
              expect focused |. to_be true;
              Js.Promise.resolve ()))
         [%mel.obj { numRuns = 8 }]);
+    test "a message the compiler marks as changing nothing keeps the model, and Ignore is one" (fun () ->
+      let fields =
+        match Todomvc.__melhole_changes_update with
+        | Program.Changes { fields; _ } -> fields
+        | Program.Unanalysed -> fun _ -> -1
+      in
+      check
+        (property (tapes ~shortest:2 ~longest:30) (fun values ->
+             let tape = tape values in
+             let model, _ = Todomvc.init ~saved:(Todomvc.encode [ { Todomvc.id = 0; title = "a"; status = Active } ]) ~hash:"#/" in
+             let model =
+               List.fold_left
+                 (fun model message -> fst (Todomvc.update message model))
+                 model
+                 (List.init (draw tape 4) (fun _ -> Todomvc.Type words.(draw tape (Array.length words))))
+             in
+             let messages =
+               Todomvc.
+                 [ Type "x"; Add; Toggle 0; Toggle_all; Destroy 0; Clear_completed; Edit 0; Retype "y"; Commit; Cancel; Route All; Ignore ]
+             in
+             let message = List.nth messages (draw tape (List.length messages)) in
+             let next, _ = Todomvc.update message model in
+             expect
+               ( (match fields message with 0 -> same next model | _ -> true),
+                 fields Todomvc.Ignore )
+             |. to_equal (true, 0)))
+        [%mel.obj { numRuns = 300 }]);
     test "decode inverts encode" (fun () ->
       check
         (property (tapes ~shortest:0 ~longest:30) (fun values ->

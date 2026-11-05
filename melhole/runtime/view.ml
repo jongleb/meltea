@@ -138,7 +138,16 @@ let group state items =
   {
     state;
     each = (fun [@u] visit -> Array.iter (fun item -> item.each visit [@u]) items);
-    front = (fun [@u] after -> Array.fold_right (fun item after -> item.front after [@u]) items after);
+    front =
+      (fun [@u] after ->
+        let rec first index =
+          match index = Array.length items with
+          | true -> after
+          | false ->
+              let found = (Array.unsafe_get items index).front Js.null [@u] in
+              if Dom_api.same found Js.null then first (index + 1) else found
+        in
+        first 0);
     release = (fun [@u] () -> Array.iter (fun item -> item.release () [@u]) items);
   }
 
@@ -315,30 +324,62 @@ let each items render project outer =
                   Array.unsafe_set projections index
                     (match projected with Some projection -> projection | None -> project item [@u])))
               items;
-            let plan = Reconcile.plan ~old:old.keys ~next:keys in
-            (match (List.compare_length_with plan.dropped old_count, extent position live) with
-            | 0, Whole ->
-                Dom_api.set_text_content position.parent "";
-                live.release () [@u]
-            | _, (Whole | Part) ->
-                List.iter (fun i -> remove position (Array.unsafe_get old.lives i)) plan.dropped);
-            let carried at i j =
-              let child = Array.unsafe_get children j in
-              match Dom_api.same child (Array.unsafe_get old.children i) with
-              | true -> Array.unsafe_get old.lives i
-              | false -> update at (Array.unsafe_get old.lives i) child
+            let rec order index =
+              match index = count with
+              | true -> `Same
+              | false ->
+                  if String.equal (Array.unsafe_get keys index) (Array.unsafe_get old.keys index) then
+                    order (index + 1)
+                  else `Moved
             in
-            let lives =
-              backwards count position (fun [@u] j at ->
-                  match Array.unsafe_get plan.steps j with
-                  | Create -> (Array.unsafe_get children j).build at [@u]
-                  | Keep i -> carried at i j
-                  | Move i ->
-                      let live = carried at i j in
-                      live.each (fun [@u] node -> insert at node) [@u];
-                      live)
-            in
-            Some (group (Each_state { items; children; keys; outer; projections; lives }) lives)
+            (match (count = old_count, order 0) with
+            | true, `Same ->
+                let lives = Array.copy old.lives in
+                let rec ahead index =
+                  match index = count with
+                  | true -> position.before
+                  | false ->
+                      let found = (Array.unsafe_get lives index).front Js.null [@u] in
+                      if Dom_api.same found Js.null then ahead (index + 1) else found
+                in
+                let rec refresh index =
+                  if index >= 0 then (
+                    let child = Array.unsafe_get children index in
+                    if not (Dom_api.same child (Array.unsafe_get old.children index)) then
+                      Array.unsafe_set lives index
+                        (update
+                           { position with before = ahead (index + 1) }
+                           (Array.unsafe_get old.lives index)
+                           child);
+                    refresh (index - 1))
+                in
+                refresh (count - 1);
+                Some (group (Each_state { items; children; keys; outer; projections; lives }) lives)
+            | _, (`Same | `Moved) ->
+                let plan = Reconcile.plan ~old:old.keys ~next:keys in
+                (match (List.compare_length_with plan.dropped old_count, extent position live) with
+                | 0, Whole ->
+                    Dom_api.set_text_content position.parent "";
+                    live.release () [@u]
+                | _, (Whole | Part) ->
+                    List.iter (fun i -> remove position (Array.unsafe_get old.lives i)) plan.dropped);
+                let carried at i j =
+                  let child = Array.unsafe_get children j in
+                  match Dom_api.same child (Array.unsafe_get old.children i) with
+                  | true -> Array.unsafe_get old.lives i
+                  | false -> update at (Array.unsafe_get old.lives i) child
+                in
+                let lives =
+                  backwards count position (fun [@u] j at ->
+                      match Array.unsafe_get plan.steps j with
+                      | Create -> (Array.unsafe_get children j).build at [@u]
+                      | Keep i -> carried at i j
+                      | Move i ->
+                          let live = carried at i j in
+                          live.each (fun [@u] node -> insert at node) [@u];
+                          live)
+                in
+                Some (group (Each_state { items; children; keys; outer; projections; lives }) lives))
         | _ -> None);
   }
 

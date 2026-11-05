@@ -179,17 +179,48 @@ type poke = Show | Hide | Keep
 let views = ref 0
 
 let split_update message model =
+  let bump count = count + 1 in
   match message with
-  | Show -> { model with shown = model.shown + 1 }
-  | Hide -> { model with hidden = model.hidden + 1 }
+  | Show -> { model with shown = bump model.shown }
+  | Hide -> { model with hidden = bump model.hidden }
   | Keep -> model
 
 let split_view { shown; _ } =
   incr views;
   <p>(Html.int shown)</p>
 
+(** An update analysed and then redefined: its companion describes the first one. *)
+module Shadowed = struct
+  let update message model = match message with Show | Hide | Keep -> model
+  let update message model = split_update message model
+  let view { shown; _ } = <p>(Html.int shown)</p>
+end
+
 let () =
   describe "Meltea laws" (fun () ->
+    test "a companion that describes another function is not used" (fun () ->
+      check
+        (property (tapes ~shortest:2 ~longest:40) (fun values ->
+             let tape = tape values in
+             let root = create_element document "div" in
+             let program =
+               Program.sandbox ~init:{ shown = 0; hidden = 0 } ~update:Shadowed.update ~view:Shadowed.view root
+             in
+             let shown = ref 0 in
+             Array.iter
+               (fun _ ->
+                 match draw tape 3 with
+                 | 0 ->
+                     incr shown;
+                     Program.dispatch program Show
+                 | 1 -> Program.dispatch program Hide
+                 | _ -> Program.flush program)
+               values;
+             Program.flush program;
+             let text = text_content root in
+             Program.stop program;
+             expect text |. to_be (string_of_int !shown)))
+        [%mel.obj { numRuns = 200 }]);
     test "the view runs exactly when a message changed a field it reads" (fun () ->
       check
         (property (tapes ~shortest:4 ~longest:60) (fun values ->

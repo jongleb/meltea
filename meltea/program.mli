@@ -2,9 +2,18 @@
 
 type 'msg t
 
-(** What the compiler found in [update] and [view], as bit masks over model fields: the fields
-    each message may change and the fields the view reads. *)
-type 'msg tracking = { changes : 'msg -> int; reads : int }
+(** The model fields each message may change, as a bit mask, with the [update] they were found in. *)
+type 'msg changes =
+  | Changes : { analysed : 'update; fields : 'msg -> int } -> 'msg changes
+  | Unanalysed
+
+(** The model fields a view reads, as a bit mask, with the view they were found in. *)
+type reads = Reads : { analysed : 'view; fields : int } -> reads | Unread
+
+(** What the compiler found in [update] and [view], checked to describe the functions in use. *)
+type 'msg tracking
+
+val track : update:'update -> changes:'msg changes -> view:'view -> reads:reads -> 'msg tracking
 
 val sandbox :
   ?tracking:'msg tracking ->

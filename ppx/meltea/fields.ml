@@ -33,6 +33,22 @@ let rec changes ~model expression =
   | _ -> everything
 
 let update ~loc expression =
+  let rec dispatch ~message ~model body =
+    match body.pexp_desc with
+    | Pexp_let (Nonrecursive, bindings, rest)
+      when not
+             (List.exists
+                (fun binding ->
+                  List.exists
+                    (fun name -> String.equal name message || String.equal name model)
+                    (Melhole_compiler.Free.bound binding.pvb_pat))
+                bindings) ->
+        dispatch ~message ~model rest
+    | Pexp_match ({ pexp_desc = Pexp_ident { txt = Lident scrutinee; _ }; _ }, cases)
+      when String.equal message scrutinee ->
+        Some cases
+    | _ -> None
+  in
   match expression.pexp_desc with
   | Pexp_function
       ( [
@@ -40,24 +56,24 @@ let update ~loc expression =
           { pparam_desc = Pparam_val (Nolabel, None, { ppat_desc = Ppat_var { txt = model; _ }; _ }); _ };
         ],
         None,
-        Pfunction_body
-          { pexp_desc = Pexp_match ({ pexp_desc = Pexp_ident { txt = Lident scrutinee; _ }; _ }, cases); _ }
-      )
-    when String.equal message scrutinee ->
-      let masks = List.map (fun case -> changes ~model case.pc_rhs) cases in
-      let rec covering cases masks =
-        match (cases, masks) with
-        | case :: rest, mask :: later ->
-            let mask =
-              Option.fold ~none:mask ~some:(fun _ -> List.fold_left ( lor ) mask later) case.pc_guard
-            in
-            { case with pc_guard = None; pc_rhs = eint ~loc mask } :: covering rest later
-        | _, _ -> []
-      in
-      Some
-        [%expr
-          (fun __melhole_message -> [%e pexp_match ~loc [%expr __melhole_message] (covering cases masks)])
-          [@ocaml.warning "-a"]]
+        Pfunction_body body ) -> (
+      match dispatch ~message ~model body with
+      | None -> None
+      | Some cases ->
+          let masks = List.map (fun case -> changes ~model case.pc_rhs) cases in
+          let rec covering cases masks =
+            match (cases, masks) with
+            | case :: rest, mask :: later ->
+                let mask =
+                  Option.fold ~none:mask ~some:(fun _ -> List.fold_left ( lor ) mask later) case.pc_guard
+                in
+                { case with pc_guard = None; pc_rhs = eint ~loc mask } :: covering rest later
+            | _, _ -> []
+          in
+          Some
+            [%expr
+              (fun __melhole_message -> [%e pexp_match ~loc [%expr __melhole_message] (covering cases masks)])
+              [@ocaml.warning "-a"]])
   | _ -> None
 
 let view expression =

@@ -3,7 +3,14 @@ open Melhole
 external queue_microtask : (unit -> unit) -> unit = "queueMicrotask"
 
 type 'msg t = { send : 'msg -> unit; draw : unit -> unit; halt : unit -> unit }
+type 'msg changes =
+  | Changes : { analysed : 'update; fields : 'msg -> int } -> 'msg changes
+  | Unanalysed
+
+type reads = Reads : { analysed : 'view; fields : int } -> reads | Unread
 type 'msg tracking = { changes : 'msg -> int; reads : int }
+
+external same : 'a -> 'b -> bool = "%eq"
 
 (** Whether a redraw is waiting for the next microtask. *)
 type schedule = Idle | Queued
@@ -49,6 +56,12 @@ let start course ~tracking ~view initial root =
   }
 
 let everything = { changes = (fun _ -> -1); reads = -1 }
+
+let track ~update ~changes ~view ~reads =
+  match (changes, reads) with
+  | Changes found, Reads read when same found.analysed update && same read.analysed view ->
+      { changes = found.fields; reads = read.fields }
+  | (Changes _ | Unanalysed), (Reads _ | Unread) -> everything
 
 let element ?(tracking = everything) ~init ~update ~view ~subscriptions root =
   let initial, commands = init in

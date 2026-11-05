@@ -112,7 +112,10 @@ let mapper =
                     (Option.map
                        (fun changes ->
                          tracked <- ("changes", name) :: tracked;
-                         [%stri let [%p Ast_builder.Default.pvar ~loc ("__melhole_changes_" ^ name)] = [%e changes]])
+                         [%stri
+                           let [%p Ast_builder.Default.pvar ~loc ("__melhole_changes_" ^ name)] =
+                             Program.Changes
+                               { analysed = [%e Ast_builder.Default.evar ~loc name]; fields = [%e changes] }])
                        (Fields.update ~loc pvb_expr))
                   @ Option.to_list
                       (Option.map
@@ -120,8 +123,25 @@ let mapper =
                            tracked <- ("reads", name) :: tracked;
                            [%stri
                              let [%p Ast_builder.Default.pvar ~loc ("__melhole_reads_" ^ name)] =
-                               [%e Ast_builder.Default.eint ~loc reads]])
-                         (Fields.view pvb_expr))
+                               Program.Reads
+                                 {
+                                   analysed = [%e Ast_builder.Default.evar ~loc name];
+                                   fields = [%e Ast_builder.Default.eint ~loc reads];
+                                 }])
+                         (Option.bind (Fields.view pvb_expr) (fun reads ->
+                              let finder =
+                                object
+                                  inherit [bool] Ast_traverse.fold as super
+
+                                  method! expression expression found =
+                                    found
+                                    || Option.is_some (Element.without_jsx expression.pexp_attributes)
+                                    || super#expression expression found
+                                end
+                              in
+                              match finder#expression pvb_expr false with
+                              | true -> Some reads
+                              | false -> None)))
               | _ -> []
             in
             Hoist.structure self#structure_item [ item ] @ companions)
@@ -135,20 +155,87 @@ let mapper =
       match expression.pexp_desc with
       | Pexp_apply
           ( ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Program", ("sandbox" | "element")); _ }; _ } as callee),
-            arguments ) -> (
+            arguments )
+        when not (List.exists (fun (label, _) -> label = Labelled "tracking") arguments) -> (
           let named label =
             List.find_map
               (fun (argument_label, argument) ->
-                match (argument_label, argument.pexp_desc) with
-                | Labelled found, Pexp_ident { txt = Lident name; _ }
-                  when String.equal found label && not (List.mem name self#locals) ->
-                    Some name
+                match argument_label with
+                | Labelled found when String.equal found label -> Some argument
                 | _ -> None)
               arguments
           in
-          match (named "update", named "view") with
-          | Some update, Some view
-            when List.mem ("changes", update) tracked && List.mem ("reads", view) tracked ->
+          let path expression =
+            match expression.pexp_desc with
+            | Pexp_ident { txt = Lident name; _ } when List.mem name self#locals -> None
+            | Pexp_ident { txt; _ } -> Some txt
+            | _ -> None
+          in
+          let analysed update =
+            match update.pexp_desc with
+            | Pexp_ident _ -> Option.map (fun found -> (found, update)) (path update)
+            | Pexp_function
+                ( [
+                    { pparam_desc = Pparam_val (Nolabel, None, { ppat_desc = Ppat_var { txt = message; _ }; _ }); _ };
+                    { pparam_desc = Pparam_val (Nolabel, None, { ppat_desc = Ppat_var { txt = model; _ }; _ }); _ };
+                  ],
+                  None,
+                  Pfunction_body body ) -> (
+                let calls expression =
+                  match expression.pexp_desc with
+                  | Pexp_apply
+                      ( function_,
+                        [
+                          (Nolabel, { pexp_desc = Pexp_ident { txt = Lident first; _ }; _ });
+                          (Nolabel, { pexp_desc = Pexp_ident { txt = Lident second; _ }; _ });
+                        ] )
+                    when String.equal first message && String.equal second model ->
+                      Option.map (fun found -> (found, function_)) (path function_)
+                  | _ -> None
+                in
+                match body.pexp_desc with
+                | Pexp_apply _ -> calls body
+                | Pexp_let (Nonrecursive, [ { pvb_pat; pvb_expr; _ } ], rest) -> (
+                    match (pvb_pat.ppat_desc, rest.pexp_desc) with
+                    | Ppat_var { txt = bound; _ }, Pexp_ident { txt = Lident result; _ }
+                    | ( Ppat_tuple ({ ppat_desc = Ppat_var { txt = bound; _ }; _ } :: _),
+                        Pexp_tuple ({ pexp_desc = Pexp_ident { txt = Lident result; _ }; _ } :: _) )
+                      when String.equal bound result ->
+                        calls pvb_expr
+                    | _ -> None)
+                | _ -> None)
+            | _ -> None
+          in
+          let companion kind fallback found =
+            let name = "__melhole_" ^ kind ^ "_" ^ Longident.last_exn found in
+            match found with
+            | Lident short ->
+                if List.mem (kind, short) tracked then Ast_builder.Default.evar ~loc name else fallback
+            | Ldot (owner, _) ->
+                Ast_builder.Default.pexp_open ~loc
+                  (Ast_builder.Default.open_infos ~loc ~override:Fresh
+                     ~expr:
+                       (Ast_builder.Default.pmod_structure ~loc
+                          [ [%stri let [%p Ast_builder.Default.pvar ~loc name] = [%e fallback]] ]))
+                  (Ast_builder.Default.pexp_open ~loc
+                     {
+                       (Ast_builder.Default.open_infos ~loc ~override:Override
+                          ~expr:(Ast_builder.Default.pmod_ident ~loc { txt = owner; loc }))
+                       with
+                       popen_attributes =
+                         [
+                           Ast_builder.Default.attribute ~loc ~name:{ txt = "ocaml.warning"; loc }
+                             ~payload:(PStr [ [%stri "-33-44-45"] ]);
+                         ];
+                     }
+                     (Ast_builder.Default.evar ~loc name))
+            | Lapply _ -> fallback
+          in
+          match
+            ( Option.bind (named "update") analysed,
+              Option.bind (named "view") (fun view -> Option.map (fun found -> (found, view)) (path view)) )
+          with
+          | Some (update_path, update), Some (view_path, view) ->
               super#expression
                 {
                   expression with
@@ -157,10 +244,10 @@ let mapper =
                       ( callee,
                         ( Labelled "tracking",
                           [%expr
-                            {
-                              Program.changes = [%e Ast_builder.Default.evar ~loc ("__melhole_changes_" ^ update)];
-                              reads = [%e Ast_builder.Default.evar ~loc ("__melhole_reads_" ^ view)];
-                            }] )
+                            Program.track ~update:[%e update]
+                              ~changes:[%e companion "changes" [%expr Program.Unanalysed] update_path]
+                              ~view:[%e view]
+                              ~reads:[%e companion "reads" [%expr Program.Unread] view_path]] )
                         :: arguments );
                 }
           | _ -> super#expression expression)
