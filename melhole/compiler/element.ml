@@ -402,6 +402,55 @@ let lowercase frontend ~loc tag arguments =
         [%expr Melhole.View.with_key ([%e key] : string) [%e frontend.unwrap loc instance]])
     key
 
+let loop frontend ~loc ~definitions ~view ~stable ~render row items =
+  match Free.closure ~definitions ~locals:frontend.locals row with
+  | Volatile -> None
+  | Reads names ->
+      let inputs values =
+        pexp_array ~loc
+          (List.map (fun value -> [%expr Melhole.View.Input [%e value]]) (stable @ values))
+      in
+      let uncurried lambda =
+        pexp_record ~loc [ ({ txt = Ldot (Ldot (Lident "Js", "Fn"), "I1"); loc }, lambda) ] None
+      in
+      let split =
+        Option.bind
+          (match row.pexp_desc with
+          | Pexp_ident { txt = Lident name; _ } -> List.assoc_opt name definitions
+          | _ -> Some row)
+          (fun lambda ->
+            match lambda.pexp_desc with
+            | Pexp_function
+                ([ { pparam_desc = Pparam_val (Nolabel, None, pattern); _ } ], None, Pfunction_body body)
+              -> (
+                match Free.of_expression lambda with
+                | Volatile -> None
+                | Reads read ->
+                    Option.map
+                      (fun leaves -> (pattern, leaves))
+                      (Free.leaves
+                         ~outer:(List.filter (fun name -> List.mem name frontend.locals) read)
+                         ~view body))
+            | _ -> None)
+      in
+      let project =
+        Option.fold
+          ~none:[%expr fun _ -> [%e inputs (List.map (fun name -> evar ~loc name) names)]]
+          ~some:(fun (pattern, leaves) ->
+            [%expr
+              fun __melhole_item ->
+                (let [%p pattern] = __melhole_item in
+                 [%e inputs leaves])
+                [@ocaml.warning "-26-27"]])
+          split
+      in
+      Some
+        [%expr
+          Melhole.View.each [%e items]
+            [%e uncurried [%expr fun __melhole_item -> [%e render [%expr [%e frontend.map row] __melhole_item]]]]
+            [%e uncurried project]
+            [%e inputs (List.map (fun name -> evar ~loc name) names)]]
+
 let fragment frontend ~loc items =
   frontend.wrap loc
     [%expr

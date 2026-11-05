@@ -142,7 +142,13 @@ let leaves ~outer ~view body =
             List.exists (fun name -> List.mem name local) names || builds expression )
         with
         | false, _ -> []
-        | true, false -> [ expression ]
+        | true, false -> (
+            match expression.pexp_desc with
+            | Pexp_function _ ->
+                List.map
+                  (fun name -> Ast_builder.Default.evar ~loc:expression.pexp_loc name)
+                  (List.filter (fun name -> List.mem name outer) free)
+            | _ -> [ expression ])
         | true, true -> inside local expression)
   and inside local expression =
     let cases local branches =

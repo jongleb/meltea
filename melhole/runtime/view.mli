@@ -1,4 +1,4 @@
-(** Descriptions of DOM content and components, and the patcher that turns
+(** Descriptions of DOM content, and the patcher that turns
     the mounted description into the next one by writing only what changed.
     Values are compared physically: mutating data in place is invisible. *)
 
@@ -24,12 +24,10 @@ val list : child list -> child
 val keyed : (string * child) list -> child
 val with_key : string -> child -> child
 val each :
-  'item list -> ('item -> child[@u]) -> ('item -> input array[@u]) -> input array -> child
+  'item array -> ('item -> child[@u]) -> ('item -> input array[@u]) -> input array -> child
 val tpl_instance : Template.t -> hole array -> child
 val lazy1 : ('a -> child) -> 'a -> child
 val lazy2 : ('a -> 'b -> child) -> 'a -> 'b -> child
-val component : Component.t -> input array -> (unit -> child) -> child
-val provide : 'value Context.t -> 'value -> child -> child
 val portal : Dom.element -> child -> child
 val memo : input array -> (unit -> child) -> child
 val items : child -> child list
@@ -47,6 +45,38 @@ val template : Template.t -> (scope -> Dom.node -> 'holes[@u]) -> 'holes templat
 val compiled : 'holes template -> int -> (scope -> 'holes -> unit[@u]) -> child
 val static : Template.t -> child
 val check : scope -> int -> 'a -> change
+val compare_inputs : input array -> input array -> change
+
+(** What a library that mounts its own kind of child keeps in it, like Melact's components. *)
+type hosted = ..
+
+type state
+
+(** A mounted child: its nodes and how to let go of what they hold. *)
+type live = private {
+  state : state;
+  each : ((Dom.node -> unit[@u]) -> unit[@u]);  (** Visits the top-level nodes in document order. *)
+  front : (Dom.node Js.null -> Dom.node Js.null[@u]);  (** The first node, or the given one. *)
+  release : (unit -> unit[@u]);  (** Releases handlers, effects and portals; the nodes stay. *)
+}
+
+val nothing : live
+
+val live :
+  hosted ->
+  each:((Dom.node -> unit[@u]) -> unit[@u]) ->
+  front:(Dom.node Js.null -> Dom.node Js.null[@u]) ->
+  release:(unit -> unit[@u]) ->
+  live
+
+val hosted : live -> hosted option
+
+val host :
+  build:(Template.position -> live[@u]) -> patch:(Template.position -> live -> live option[@u]) -> child
+
+val build : child -> Template.position -> live
+val update : Template.position -> live -> child -> live
+val insert : Template.position -> Dom.node -> unit
 
 (** The holes of a compiled template, written directly by its refresh. *)
 module Hole : sig
@@ -82,22 +112,3 @@ val mount :
 
 val patch : mounted -> child -> unit
 val unmount : mounted -> unit
-
-(** A mounted component, as seen by the hooks it calls. *)
-type instance
-
-(** When an effect runs after its instance is patched. *)
-type timing =
-  | Layout  (** Synchronously, before the browser paints. *)
-  | Passive  (** After the whole flush, once the browser has painted. *)
-
-val current : unit -> instance
-val slot : instance -> 'a Hook.key -> (unit -> 'a) -> 'a
-val invalidate : instance -> unit
-(** Within one commit every cleanup runs before any effect, as in React. *)
-type phase = Cleanup | Run
-
-val after_commit : instance -> timing -> phase -> (unit -> unit) -> unit
-val on_unmount : instance -> (unit -> unit) -> unit
-val consume : instance -> 'value Context.t -> 'value
-val flush : unit -> unit

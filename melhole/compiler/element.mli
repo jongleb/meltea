@@ -38,6 +38,17 @@ type frontend = {
 val without_jsx : Ppxlib.attributes -> Ppxlib.attributes option
 val list_items : Ppxlib.expression -> Ppxlib.expression list option
 
+val loop :
+  frontend ->
+  loc:Ppxlib.location ->
+  definitions:(string * Ppxlib.expression) list ->
+  view:(Ppxlib.expression -> bool) ->
+  stable:Ppxlib.expression list ->
+  render:(Ppxlib.expression -> Ppxlib.expression) ->
+  Ppxlib.expression ->
+  Ppxlib.expression ->
+  Ppxlib.expression option
+
 val lowercase :
   frontend -> loc:Ppxlib.location -> string -> (Ppxlib.arg_label * Ppxlib.expression) list -> Ppxlib.expression
 

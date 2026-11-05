@@ -81,83 +81,18 @@ let mapper =
                               [ (Nolabel, row); (Nolabel, items) ] );
                         _;
                       } );
-                  ] ) -> (
-                match Free.closure ~definitions:self#definitions ~locals:self#locals row with
-                | Volatile -> None
-                | Reads names ->
-                    let inputs values =
-                      Ast_builder.Default.pexp_array ~loc
-                        (List.map
-                           (fun value -> [%expr Melhole.View.Input [%e value]])
-                           ([%expr __melhole_dispatch] :: values))
-                    in
-                    let uncurried lambda =
-                      Ast_builder.Default.pexp_record ~loc
-                        [ ({ txt = Ldot (Ldot (Lident "Js", "Fn"), "I1"); loc }, lambda) ]
-                        None
-                    in
-                    let lambda =
-                      match row.pexp_desc with
-                      | Pexp_ident { txt = Lident name; _ } -> List.assoc_opt name self#definitions
-                      | _ -> Some row
-                    in
-                    let split =
-                      Option.bind lambda (fun lambda ->
-                          match lambda.pexp_desc with
-                          | Pexp_function
-                              ( [ { pparam_desc = Pparam_val (Nolabel, None, pattern); _ } ],
-                                None,
-                                Pfunction_body body ) -> (
-                              match Free.of_expression lambda with
-                              | Volatile -> None
-                              | Reads read ->
-                                  Option.map
-                                    (fun leaves -> (pattern, leaves))
-                                    (Free.leaves
-                                       ~outer:(List.filter (fun name -> List.mem name self#locals) read)
-                                       ~view:(fun expression ->
-                                         match expression.pexp_desc with
-                                         | Pexp_apply
-                                             ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", _); _ }; _ }, _)
-                                         | Pexp_construct ({ txt = Lident ("::" | "[]"); _ }, _) ->
-                                             true
-                                         | _ -> false)
-                                       body))
-                          | _ -> None)
-                    in
-                    let project =
-                      uncurried
-                        (Option.fold
-                           ~none:
-                             [%expr
-                               fun _ ->
-                                 [%e inputs (List.map (fun name -> Ast_builder.Default.evar ~loc name) names)]]
-                           ~some:(fun (pattern, leaves) ->
-                             [%expr
-                               fun __melhole_item ->
-                                 (let [%p pattern] = __melhole_item in
-                                  [%e inputs leaves])
-                                 [@ocaml.warning "-26-27"]])
-                           split)
-                    in
-                    let render =
-                      Ast_builder.Default.pexp_record ~loc
-                        [
-                          ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I1"); loc },
-                            [%expr
-                              fun __melhole_item ->
-                                Html.render ([%e self#expression row] __melhole_item) __melhole_dispatch] );
-                        ]
-                        None
-                    in
-                    Some
-                      [%expr
-                        Melhole.View.each [%e self#expression items] [%e render] [%e project]
-                          [%e
-                            Ast_builder.Default.pexp_array ~loc
-                              (List.map
-                                 (fun name -> [%expr Melhole.View.Input [%e Ast_builder.Default.evar ~loc name]])
-                                 ("__melhole_dispatch" :: names))]])
+                  ] ) ->
+                Element.loop self#frontend ~loc ~definitions:self#definitions
+                  ~view:(fun expression ->
+                    match expression.pexp_desc with
+                    | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", _); _ }; _ }, _)
+                    | Pexp_construct ({ txt = Lident ("::" | "[]"); _ }, _) ->
+                        true
+                    | _ -> false)
+                  ~stable:[ [%expr __melhole_dispatch] ]
+                  ~render:(fun view -> [%expr Html.render [%e view] __melhole_dispatch])
+                  row
+                  [%expr Array.of_list [%e self#expression items]]
             | _ -> None);
       }
 
