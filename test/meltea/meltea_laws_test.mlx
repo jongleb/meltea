@@ -762,3 +762,44 @@ let () =
            Program.stop mounted;
            expect (computed, same) |. to_equal (!expected, true)))
         [%mel.obj { numRuns = 300 }]))
+
+module Second = struct
+  let view model = <div className="second">(view model)</div>
+end
+
+let () =
+  describe "Meltea hot start" (fun () ->
+    test "new code on the same root keeps the running model when the types are the same, and starts from init otherwise" (fun () ->
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           let tape = tape values in
+           let steps = steps tape in
+           let kind = draw tape 2 in
+           let root = attached () and fresh = attached () in
+           let first = Program.sandbox ~init ~update ~view root in
+           run first steps;
+           let second =
+             match kind with
+             | 0 -> Program.sandbox ~start:Program.hot ~init ~update ~view:Second.view root
+             | _ ->
+                 Program.sandbox ~start:Program.hot
+                   ~tracking:
+                     (Program.track ~update ~changes:Program.Unanalysed ~view:Second.view ~reads:Program.Unread
+                        ~shape:(Program.Shape "other"))
+                   ~init ~update ~view:Second.view root
+           in
+           let shown = snapshot root in
+           Program.dispatch first Add;
+           Program.dispatch first (Type "late");
+           Program.flush first;
+           let still = snapshot root in
+           let expected =
+             Program.sandbox ~init:(match kind with 0 -> final steps | _ -> init) ~update ~view:Second.view fresh
+           in
+           let wanted = snapshot fresh in
+           Program.stop second;
+           Program.stop expected;
+           remove_root root;
+           remove_root fresh;
+           expect (shown = wanted, still = wanted) |. to_equal (true, true)))
+        [%mel.obj { numRuns = 300 }]))

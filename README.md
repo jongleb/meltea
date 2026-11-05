@@ -75,6 +75,13 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
 - **Pacing.** A message sent by a click or a key is drawn at the next microtask; messages sent by
   pointer moves, scroll and wheel are drawn once per frame, as the Elm runtime does, and a click
   in between draws at once.
+- **Hot reload.** With `~start:Program.hot` and Vite's HMR, an edit to the code shows the new view
+  of the old model; when the module's types changed it starts from `init`.
+
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hot-dark.svg">
+    <img src="assets/hot.svg" alt="Hot reload: new code on the same root takes the running model when the shape of the module's types is the same, and starts from init otherwise" width="100%">
+  </picture>
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
 - **Server.** `Program.render` writes HTML in React's format, `~start:Program.hydrate` takes it over
   in the browser; compile with `(pps melange.ppx meltea-ppx -hydratable)` to include the code that

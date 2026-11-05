@@ -14,10 +14,12 @@ let () =
   Option.iter
     (fun root ->
       ignore
-        (Program.element
+        (Program.element ~start:Program.hot
            ~init:(Todomvc.init ~saved:(Option.value ~default:"[]" (saved "todos-meltea")) ~hash)
            ~update:(fun message model ->
              let next, command = Todomvc.update message model in
              (next, Cmd.batch [ command; Cmd.port (save "todos-meltea") (Todomvc.encode next.todos) ]))
            ~view:Todomvc.view ~subscriptions:Todomvc.subscriptions root))
     (element_by_id document "root")
+
+let () = [%mel.raw {|import.meta.hot && import.meta.hot.accept()|}]

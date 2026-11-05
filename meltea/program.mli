@@ -8,6 +8,10 @@ type start
 val mount : start
 val hydrate : start
 
+(** For development: take the model of the program running on the root, when the module's types
+    are the same, so that new code shows the old state; otherwise start from [init]. *)
+val hot : start
+
 (** The model fields each message may change, as a bit mask, with the [update] they were found in. *)
 type 'msg changes =
   | Changes : { analysed : 'update; fields : 'msg -> int } -> 'msg changes
@@ -15,6 +19,9 @@ type 'msg changes =
 
 (** The model fields a view reads, as a bit mask, with the view they were found in. *)
 type reads = Reads : { analysed : 'view; fields : int } -> reads | Unread
+
+(** The type declarations of the module that defines [update], as a digest. *)
+type shape = Shape of string | Unshaped
 
 (** What the compiler found in [update] and [view], checked to describe the functions in use. *)
 type 'msg tracking
@@ -24,7 +31,7 @@ val mutable_read : unit
   mutable_model
     "this model field can change in place, and Meltea redraws only when the model value changes: keep the model immutable"]
 
-val track : update:'update -> changes:'msg changes -> view:'view -> reads:reads -> 'msg tracking
+val track : update:'update -> changes:'msg changes -> view:'view -> reads:reads -> shape:shape -> 'msg tracking
 
 val sandbox :
   ?tracking:'msg tracking ->

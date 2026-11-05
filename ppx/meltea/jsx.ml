@@ -116,6 +116,12 @@ let mapper =
 
     method! structure items =
       let items = Fanout.annotate items in
+      let shape =
+        Digest.to_hex
+          (Digest.string
+             (Pprintast.string_of_structure
+                (List.filter (fun item -> match item.pstr_desc with Pstr_type _ -> true | _ -> false) items)))
+      in
       let known = tracked in
       let mapped =
         List.concat_map
@@ -134,6 +140,15 @@ let mapper =
                              Program.Changes
                                { analysed = [%e Ast_builder.Default.evar ~loc name]; fields = [%e changes] }])
                        (Fields.update ~loc pvb_expr))
+                  @ (match (Fields.branches pvb_expr, name) with
+                    | Some _, _ | None, "update" ->
+                        tracked <- ("shape", name) :: tracked;
+                        [
+                          [%stri
+                            let [%p Ast_builder.Default.pvar ~loc ("__melhole_shape_" ^ name)] =
+                              Program.Shape [%e Ast_builder.Default.estring ~loc shape]];
+                        ]
+                    | None, _ -> [])
                   @ Option.to_list
                       (Option.map
                          (fun reads ->
@@ -264,7 +279,8 @@ let mapper =
                             Program.track ~update:[%e update]
                               ~changes:[%e companion "changes" [%expr Program.Unanalysed] update_path]
                               ~view:[%e view]
-                              ~reads:[%e companion "reads" [%expr Program.Unread] view_path]] )
+                              ~reads:[%e companion "reads" [%expr Program.Unread] view_path]
+                              ~shape:[%e companion "shape" [%expr Program.Unshaped] update_path]] )
                         :: arguments );
                 }
           | _ -> super#expression expression)
