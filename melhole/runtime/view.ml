@@ -725,17 +725,28 @@ let rows (type holes item) (items : item array) (render : (item -> holes row)[@u
                   | Kept from when from = i -> Array.unsafe_get old.rows i
                   | Kept _ | Fresh _ -> refreshed (Array.unsafe_get old.rows i) (drawn j)
                 in
+                let placed j before =
+                  match Array.unsafe_get plan.steps j with
+                  | Create -> mount { position with before } (drawn j)
+                  | Keep i -> carried i j
+                  | Move i ->
+                      let moved = carried i j in
+                      Dom_api.insert_before position.parent (root_of moved) before;
+                      moved
+                in
                 let rows =
-                  backwards count position
-                    (fun [@u] j at ->
-                      match Array.unsafe_get plan.steps j with
-                      | Create -> mount at (drawn j)
-                      | Keep i -> carried i j
-                      | Move i ->
-                          let moved = carried i j in
-                          insert at (root_of moved);
-                          moved)
-                    front
+                  match count with
+                  | 0 -> [||]
+                  | _ ->
+                      let last = placed (count - 1) position.before in
+                      let rows = Array.make count last in
+                      let before = ref (Js.Null.return (root_of last)) in
+                      for j = count - 2 downto 0 do
+                        let row = placed j !before in
+                        Array.unsafe_set rows j row;
+                        before := Js.Null.return (root_of row)
+                      done;
+                      rows
                 in
                 Some (shown items keys projections rows))
         | _ -> None);
