@@ -135,6 +135,11 @@ val style_hole : Dom.element -> Hole.style
 val set_style : Hole.style -> (string * string) list -> unit
 val handler_hole : scope -> Dom.element -> string -> Hole.handler
 val set_handler : Hole.handler -> (Dom.event -> unit) -> unit
+val text_at : Template.position -> Dom.text
+val put_text : scope -> int -> Dom.text -> string -> unit
+val put_attr : scope -> int -> Dom.element -> string -> string option -> unit
+val listen : scope -> Dom.element -> string -> string
+val put_handler : Dom.element -> string -> (Dom.event -> unit) -> unit
 val reference_hole : scope -> Dom.element -> Hole.reference
 val set_reference : Hole.reference -> (Dom.element -> unit) -> unit
 val content_hole : scope -> Template.position -> Hole.content

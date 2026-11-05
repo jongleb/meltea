@@ -871,6 +871,31 @@ let handler_hole scope element event =
 
 let set_handler (hole : Hole.handler) next = Events.set hole.element hole.key next
 
+let text_at position = !medium.text position None [@u]
+
+let put_text scope slot node value =
+  let (Input last) = Array.unsafe_get scope.deps slot in
+  if not (Dom_api.same last value) then (
+    Dom_api.set_data node value;
+    Array.unsafe_set scope.deps slot (Input value))
+
+let put_attr scope slot element name value =
+  let (Input last) = Array.unsafe_get scope.deps slot in
+  if not (Dom_api.same last value) then (
+    (match value with
+    | Some value -> Dom_api.set_attribute element name value
+    | None -> Dom_api.remove_attribute element name);
+    Array.unsafe_set scope.deps slot (Input value))
+
+let listen scope element event =
+  let key, registration = Events.bind element event in
+  (match registration with
+  | Events.Delegated -> ()
+  | Events.Direct remove -> scope.cleanups <- (fun [@u] () -> remove ()) :: scope.cleanups);
+  key
+
+let put_handler element key next = Events.set element key next
+
 let reference_hole scope element =
   let hole : Hole.reference = { scope; element; callback = ignore } in
   scope.references <- (fun [@u] () -> hole.callback hole.element) :: scope.references;

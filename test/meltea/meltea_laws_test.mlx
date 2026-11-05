@@ -185,6 +185,23 @@ external class_name : Dom.node -> string = "className" [@@mel.get]
 let mark_init =
   { rows = List.init 6 (fun id -> { id; title = "t" ^ string_of_int id; finished = false }); chosen = None; suffix = "" }
 
+let derived_view count =
+  <button className=(match count < 0 with true -> "negative" | false -> "") disabled=(count mod 3 = 0)>
+    (Html.text (string_of_int (count / 4)))
+  </button>
+
+let scroll_view shown =
+  <section>
+    (match shown with
+    | true -> <div onScroll=(not shown)>(Html.text "scroll me")</div>
+    | false -> Html.none)
+  </section>
+
+let derived_writes previous next =
+  (match (previous < 0, next < 0) with true, true | false, false -> 0 | _ -> 1)
+  + (match (previous mod 3 = 0, next mod 3 = 0) with true, true | false, false -> 0 | _ -> 1)
+  + match previous / 4 = next / 4 with true -> 0 | false -> 1
+
 (** A model with a field the view shows and one it never reads. *)
 type split = { shown : int; hidden : int }
 
@@ -338,6 +355,56 @@ let () =
              use_real_timers ();
              expect seen |. to_equal wanted))
         [%mel.obj { numRuns = 200 }]);
+    test "a hole is written exactly when its value changes, and an attribute that becomes None goes" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:40) (fun values ->
+             let tape = tape values in
+             let root = create_element document "div" and fresh = create_element document "div" in
+             let program = Program.sandbox ~init:0 ~update:(fun next _ -> next) ~view:derived_view root in
+             let watcher = observer (fun () -> ()) in
+             observe watcher root [%mel.obj { childList = true; subtree = true; attributes = true; characterData = true }];
+             let count = ref 0 in
+             let seen =
+               List.map
+                 (fun _ ->
+                   let next = draw tape 13 - 6 in
+                   let expected = derived_writes !count next in
+                   count := next;
+                   Program.dispatch program next;
+                   Program.flush program;
+                   (Array.length (take_records watcher), expected))
+                 (List.init (Array.length values) Fun.id)
+             in
+             disconnect watcher;
+             let expected_page = Program.sandbox ~init:!count ~update:(fun next _ -> next) ~view:derived_view fresh in
+             let shown = (shapes (as_node root), shapes (as_node fresh)) in
+             Program.stop program;
+             Program.stop expected_page;
+             expect (List.map fst seen, fst shown) |. to_equal (List.map snd seen, snd shown)))
+        [%mel.obj { numRuns = 200 }]);
+    test "an element's own listener for a non-bubbling event goes with the element" (fun () ->
+      check
+        (property (tapes ~shortest:2 ~longest:20) (fun values ->
+             let tape = tape values in
+             let adds = spy_on event_target_prototype "addEventListener" in
+             let removes = spy_on event_target_prototype "removeEventListener" in
+             let root = create_element document "div" in
+             let program = Program.sandbox ~init:true ~update:(fun next _ -> next) ~view:scroll_view root in
+             Array.iter
+               (fun _ ->
+                 Program.dispatch program (draw tape 2 = 0);
+                 Program.flush program)
+               values;
+             Program.stop program;
+             let scrolls spy =
+               List.length
+                 (List.filter (fun call -> String.equal call.(0) "scroll") (Array.to_list (calls (mock spy))))
+             in
+             let left = scrolls adds - scrolls removes and added = scrolls adds in
+             restore adds;
+             restore removes;
+             expect (left, added > 0) |. to_equal (0, true)))
+        [%mel.obj { numRuns = 100 }]);
     test "after any change of subscriptions, a hash change sends exactly the current ones' messages"
       (fun () ->
         check

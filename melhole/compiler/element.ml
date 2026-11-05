@@ -252,30 +252,34 @@ let lowercase frontend ~loc ~attributes tag arguments =
   in
   let at indices = [%expr Melhole.Template.element [%e node indices]] in
   let scope = [%expr __melhole_scope] in
-  let creators, values =
-    List.split
-      (List.map
-         (fun (hole : expression Markup.hole) ->
-           match hole with
-           | On_element (indices, Attr name, value) ->
-               ([%expr Melhole.View.attr_hole [%e at indices] [%e estring ~loc name]], value)
-           | On_element (indices, Prop name, value) ->
-               ([%expr Melhole.View.prop_hole [%e at indices] [%e estring ~loc name]], value)
-           | On_element (indices, Control name, value) ->
-               ([%expr Melhole.View.controlled_hole [%e at indices] [%e estring ~loc name]], value)
-           | On_element (indices, Handler event, value) ->
-               ( [%expr Melhole.View.handler_hole [%e scope] [%e at indices] [%e estring ~loc event]],
-                 value )
-           | On_element (indices, Ref, value) ->
-               ([%expr Melhole.View.reference_hole [%e scope] [%e at indices]], value)
-           | On_element (indices, Style, value) -> ([%expr Melhole.View.style_hole [%e at indices]], value)
-           | At_position (indices, index, Text_slot, value) ->
-               ([%expr Melhole.View.text_hole [%e position indices index]], value)
-           | At_position (indices, index, Child_slot, value) ->
-               ([%expr Melhole.View.content_hole [%e scope] [%e position indices index]], value))
-         holes)
-  in
   let hole_name index = "__melhole_hole_" ^ string_of_int index in
+  let key_name index = "__melhole_key_" ^ string_of_int index in
+  let made_holes =
+    List.mapi
+      (fun index (hole : expression Markup.hole) ->
+        let one creator value = ([ (hole_name index, creator) ], value) in
+        match hole with
+        | On_element (indices, Attr _, value) -> one (at indices) value
+        | On_element (indices, Handler event, value) ->
+            ( [
+                (hole_name index, at indices);
+                (key_name index, [%expr Melhole.View.listen [%e scope] [%e at indices] [%e estring ~loc event]]);
+              ],
+              value )
+        | At_position (indices, index_in, Text_slot, value) ->
+            one [%expr Melhole.View.text_at [%e position indices index_in]] value
+        | On_element (indices, Prop name, value) ->
+            one [%expr Melhole.View.prop_hole [%e at indices] [%e estring ~loc name]] value
+        | On_element (indices, Control name, value) ->
+            one [%expr Melhole.View.controlled_hole [%e at indices] [%e estring ~loc name]] value
+        | On_element (indices, Ref, value) -> one [%expr Melhole.View.reference_hole [%e scope] [%e at indices]] value
+        | On_element (indices, Style, value) -> one [%expr Melhole.View.style_hole [%e at indices]] value
+        | At_position (indices, index_in, Child_slot, value) ->
+            one [%expr Melhole.View.content_hole [%e scope] [%e position indices index_in]] value)
+      holes
+  in
+  let creators = List.concat_map fst made_holes in
+  let values = List.map snd made_holes in
   let tuple items = match items with [ single ] -> single | _ -> pexp_tuple ~loc items in
   let made =
     List.fold_right
@@ -286,7 +290,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
           | Next_of previous -> [%expr Melhole.Template.next [%e node previous]]
         in
         [%expr let [%p pvar ~loc (name indices)] = [%e reach] in [%e body]])
-      walk (tuple creators)
+      walk (tuple (List.map snd creators))
   in
   let markup =
     match element.tag with
@@ -321,7 +325,21 @@ let lowercase frontend ~loc ~attributes tag arguments =
       (fun guard -> match guard with Free.Reads [] -> Some constant | Free.Reads (_ :: _) | Free.Volatile -> None)
       guards
   in
-  let slots = constant + Option.fold ~none:0 ~some:(fun _ -> 1) mounted in
+  let guard_slots = constant + Option.fold ~none:0 ~some:(fun _ -> 1) mounted in
+  let value_slots =
+    List.rev
+      (snd
+         (List.fold_left
+            (fun (next, found) (index, (hole : expression Markup.hole)) ->
+              match hole with
+              | On_element (_, Attr _, _) | At_position (_, _, Text_slot, _) -> (next + 1, (index, next) :: found)
+              | On_element (_, (Prop _ | Control _ | Handler _ | Ref | Style), _) | At_position (_, _, Child_slot, _) ->
+                  (next, found))
+            (guard_slots, [])
+            (List.mapi (fun index hole -> (index, hole)) holes)))
+  in
+  let slots = guard_slots + List.length value_slots in
+  let value_slot index = eint ~loc (List.assoc index value_slots) in
   let flag_name index = Printf.sprintf "__melhole_changed_%d" index in
   let flag index = evar ~loc (flag_name index) in
   let slot name =
@@ -335,19 +353,21 @@ let lowercase frontend ~loc ~attributes tag arguments =
   let sets =
     List.mapi
       (fun index (guard, (hole : expression Markup.hole)) ->
-        let writer, value =
-          match hole with
-          | On_element (_, Attr _, value) -> ("set_attr", value)
-          | On_element (_, (Prop _ | Control _), value) -> ("set_prop", value)
-          | On_element (_, Handler _, value) -> ("set_handler", value)
-          | On_element (_, Ref, value) -> ("set_reference", value)
-          | On_element (_, Style, value) -> ("set_style", value)
-          | At_position (_, _, Text_slot, value) -> ("set_text", value)
-          | At_position (_, _, Child_slot, value) -> ("set_content", value)
-        in
+        let hole_value = evar ~loc (hole_name index) in
         let set =
-          [%expr
-            [%e evar ~loc ("Melhole.View." ^ writer)] [%e evar ~loc (hole_name index)] [%e value]]
+          match hole with
+          | On_element (_, Attr name, value) ->
+              [%expr
+                Melhole.View.put_attr __melhole_scope [%e value_slot index] [%e hole_value] [%e estring ~loc name]
+                  [%e value]]
+          | At_position (_, _, Text_slot, value) ->
+              [%expr Melhole.View.put_text __melhole_scope [%e value_slot index] [%e hole_value] [%e value]]
+          | On_element (_, Handler _, value) ->
+              [%expr Melhole.View.put_handler [%e hole_value] [%e evar ~loc (key_name index)] [%e value]]
+          | On_element (_, (Prop _ | Control _), value) -> [%expr Melhole.View.set_prop [%e hole_value] [%e value]]
+          | On_element (_, Ref, value) -> [%expr Melhole.View.set_reference [%e hole_value] [%e value]]
+          | On_element (_, Style, value) -> [%expr Melhole.View.set_style [%e hole_value] [%e value]]
+          | At_position (_, _, Child_slot, value) -> [%expr Melhole.View.set_content [%e hole_value] [%e value]]
         in
         match guard with
         | Free.Volatile -> set
@@ -399,7 +419,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
                 [%e uncurried [%expr fun __melhole_scope [%p pvar ~loc (name [])] -> [%e made]]]]
         in
         let holes =
-          match List.mapi (fun index _ -> pvar ~loc (hole_name index)) values with
+          match List.map (fun (name, _) -> pvar ~loc name) creators with
           | [ single ] -> single
           | patterns -> ppat_tuple ~loc patterns
         in
