@@ -197,6 +197,15 @@ let scroll_view shown =
     | false -> Html.none)
   </section>
 
+(** What the buttons send, through which tag, and what the test shows next. *)
+type picked = Picked of int | Tagged of picked | Display of (int list * bool)
+
+let picker_view (shown, tagged) =
+  let buttons = Html.list (List.map (fun value -> <button onClick=(Picked value)><b>(Html.int value)</b></button>) shown) in
+  <div>(match tagged with true -> Html.map (fun message -> Tagged message) buttons | false -> buttons)</div>
+
+external as_element : Dom.node -> Dom.element = "%identity"
+
 let derived_writes previous next =
   (match (previous < 0, next < 0) with true, true | false, false -> 0 | _ -> 1)
   + (match (previous mod 3 = 0, next mod 3 = 0) with true, true | false, false -> 0 | _ -> 1)
@@ -405,6 +414,41 @@ let () =
              restore removes;
              expect (left, added > 0) |. to_equal (0, true)))
         [%mel.obj { numRuns = 100 }]);
+    test "a click sends the message of what the clicked element shows now, through the current dispatch" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:40) (fun values ->
+             let tape = tape values in
+             let sent = ref [] and expected = ref [] in
+             let root = attached () in
+             let model = ref ([ 1; 2; 3 ], false) in
+             let program =
+               Program.sandbox ~init:!model
+                 ~update:(fun message state ->
+                   match message with
+                   | Display (shown, tagged) -> (shown, tagged)
+                   | Picked _ | Tagged _ ->
+                       sent := message :: !sent;
+                       state)
+                 ~view:picker_view root
+             in
+             Array.iter
+               (fun _ ->
+                 match draw tape 3 with
+                 | 0 ->
+                     let next = (List.init (1 + draw tape 4) (fun _ -> draw tape 9), draw tape 2 = 0) in
+                     model := next;
+                     Program.dispatch program (Display next);
+                     Program.flush program
+                 | _ ->
+                     let shown, tagged = !model in
+                     let at = draw tape (List.length shown) in
+                     click (as_element (nodes (select_all root "b")).(at));
+                     let message = Picked (List.nth shown at) in
+                     expected := (match tagged with true -> Tagged message | false -> message) :: !expected)
+               values;
+             Program.stop program;
+             expect (List.rev !sent) |. to_equal (List.rev !expected)))
+        [%mel.obj { numRuns = 150 }]);
     test "after any change of subscriptions, a hash change sends exactly the current ones' messages"
       (fun () ->
         check

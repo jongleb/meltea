@@ -11,6 +11,8 @@ type handler = {
   value : expression;
 }
 
+type handlers = Closures | Linked of string
+
 type frontend = {
   name : string;
   locals : string list;
@@ -18,6 +20,7 @@ type frontend = {
   wrap : location -> expression -> expression;
   unwrap : location -> expression -> expression;
   handler : location -> handler -> expression;
+  handlers : handlers;
   style : location -> [ `Required | `Optional ] -> expression -> expression;
   reference : location -> [ `Required | `Optional ] -> expression -> expression;
   classify : expression -> special option;
@@ -362,8 +365,33 @@ let lowercase frontend ~loc ~attributes tag arguments =
                   [%e value]]
           | At_position (_, _, Text_slot, value) ->
               [%expr Melhole.View.put_text __melhole_scope [%e value_slot index] [%e hole_value] [%e value]]
-          | On_element (_, Handler _, value) ->
-              [%expr Melhole.View.put_handler [%e hole_value] [%e evar ~loc (key_name index)] [%e value]]
+          | On_element (_, Handler _, value) -> (
+              let key = evar ~loc (key_name index) in
+              match (frontend.handlers, guard) with
+              | Linked dispatch, Free.Reads names ->
+                  let data = List.filter (fun name -> not (String.equal name dispatch)) names in
+                  let pattern, carried =
+                    match data with
+                    | [] -> ([%pat? ()], [%expr ()])
+                    | [ single ] -> (pvar ~loc single, evar ~loc single)
+                    | _ :: _ :: _ ->
+                        (ppat_tuple ~loc (List.map (pvar ~loc) data), pexp_tuple ~loc (List.map (evar ~loc) data))
+                  in
+                  let body =
+                    pexp_record ~loc
+                      [
+                        ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I3"); loc },
+                          [%expr
+                            fun __melhole_data [%p pvar ~loc dispatch] __melhole_event ->
+                              (let [%p pattern] = __melhole_data in
+                               [%e value] __melhole_event)
+                              [@ocaml.warning "-26-27"]] );
+                      ]
+                      None
+                  in
+                  let site = Hoist.hoist ~loc "link" [%expr Melhole.View.link [%e body]] in
+                  [%expr Melhole.View.put_linked [%e hole_value] [%e key] [%e site] [%e evar ~loc dispatch] [%e carried]]
+              | Linked _, Free.Volatile | Closures, _ -> [%expr Melhole.View.put_handler [%e hole_value] [%e key] [%e value]])
           | On_element (_, (Prop _ | Control _), value) -> [%expr Melhole.View.set_prop [%e hole_value] [%e value]]
           | On_element (_, Ref, value) -> [%expr Melhole.View.set_reference [%e hole_value] [%e value]]
           | On_element (_, Style, value) -> [%expr Melhole.View.set_style [%e hole_value] [%e value]]

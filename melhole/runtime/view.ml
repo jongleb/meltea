@@ -896,6 +896,35 @@ let listen scope element event =
 
 let put_handler element key next = Events.set element key next
 
+(** A handler site compiled once: what it does with the data its element carries and the dispatch. *)
+type ('data, 'dispatch) link = {
+  body : ('data -> 'dispatch -> Dom.event -> unit[@u]);
+  data_key : string;  (** The element property that carries this site's data. *)
+  mutable sent : 'dispatch option;  (** The dispatch the shared handler was made for. *)
+  mutable handler : Dom.event -> unit;
+}
+
+let sites = ref 0
+
+let link body =
+  incr sites;
+  {
+    body;
+    data_key = "$$melhole:data" ^ string_of_int !sites;
+    sent = None;
+    handler = ignore;
+  }
+
+let put_linked element key link dispatch data =
+  Dom_api.set_property element link.data_key data;
+  (match link.sent with
+  | Some sent when Dom_api.same sent dispatch -> ()
+  | Some _ | None ->
+      link.sent <- Some dispatch;
+      link.handler <-
+        (fun event -> link.body (Dom_api.property (Dom_api.current_target event) link.data_key) dispatch event [@u]));
+  Events.set element key link.handler
+
 let reference_hole scope element =
   let hole : Hole.reference = { scope; element; callback = ignore } in
   scope.references <- (fun [@u] () -> hole.callback hole.element) :: scope.references;

@@ -16,6 +16,12 @@ type handler = {
   value : Ppxlib.expression;
 }
 
+(** How a front end's handlers reach their elements. *)
+type handlers =
+  | Closures  (** A closure per element, written whenever the values it reads change. *)
+  | Linked of string
+      (** One handler per site; the element carries the locals it reads, apart from this dispatch. *)
+
 (** How a front end shapes elements around the templates. *)
 type frontend = {
   name : string;  (** For error messages. *)
@@ -24,6 +30,7 @@ type frontend = {
   wrap : Ppxlib.location -> Ppxlib.expression -> Ppxlib.expression;  (** A [View.child] into an element. *)
   unwrap : Ppxlib.location -> Ppxlib.expression -> Ppxlib.expression;  (** An element into a [View.child]. *)
   handler : Ppxlib.location -> handler -> Ppxlib.expression;  (** The hole value of an event prop. *)
+  handlers : handlers;
   style : Ppxlib.location -> [ `Required | `Optional ] -> Ppxlib.expression -> Ppxlib.expression;
       (** The hole value of a [style] prop. *)
   reference : Ppxlib.location -> [ `Required | `Optional ] -> Ppxlib.expression -> Ppxlib.expression;

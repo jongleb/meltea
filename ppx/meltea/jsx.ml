@@ -27,6 +27,7 @@ let mapper =
         unwrap =
           (fun loc element ->
             [%expr Html.render [%e element] __melhole_dispatch]);
+        handlers = Element.Linked "__melhole_dispatch";
         handler =
           (fun loc { label; requirement; value; _ } ->
             let send message =
