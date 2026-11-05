@@ -25,6 +25,17 @@ val keyed : (string * child) list -> child
 val with_key : string -> child -> child
 val each :
   'item array -> ('item -> child[@u]) -> ('item -> input array[@u]) -> input array -> child
+(** One row of a compiled loop before it is mounted. *)
+type 'holes row
+
+(** A mounted compiled template: the values its refresh last read and what it holds. *)
+type scope
+
+(** A compiled template: its markup and how to make its holes on a fresh clone. *)
+type 'holes template
+
+val row : 'holes template -> int -> (scope -> 'holes -> unit[@u]) -> string -> 'holes row
+val rows : 'item array -> ('item -> 'holes row[@u]) -> ('item -> input array[@u]) -> input array -> child
 val tpl_instance : Template.t -> hole array -> child
 val lazy1 : ('a -> child) -> 'a -> child
 val lazy2 : ('a -> 'b -> child) -> 'a -> 'b -> child
@@ -32,12 +43,6 @@ val portal : Dom.element -> child -> child
 val memo : input array -> (unit -> child) -> child
 val pure : 'identity -> input array -> (unit -> child) -> child
 val items : child -> child list
-
-(** A mounted compiled template: the values its refresh last read and what it holds. *)
-type scope
-
-(** A compiled template: its markup and how to make its holes on a fresh clone. *)
-type 'holes template
 
 (** Whether a value differs from the one a scope remembers for it. *)
 type change = Changed | Unchanged
@@ -73,13 +78,24 @@ type medium = {
   placed : (Template.position -> Dom.element -> unit[@u]);
   opened : (Template.position -> range[@u]);  (** Where a content hole's children go. *)
   closed : (Dom.node -> Dom.node -> range[@u]);  (** After a hole's first children, before its closing marker. *)
-  built : (int -> Template.position -> (int -> Template.position -> live[@u]) -> live array[@u]);
+  built :
+    'made.
+    (int ->
+    Template.position ->
+    (int -> Template.position -> 'made[@u]) ->
+    ('made -> Dom.node Js.null -> Dom.node Js.null[@u]) ->
+    'made array[@u]);
   aside : ((unit -> live[@u]) -> live[@u]);  (** Children that live elsewhere, like a portal's. *)
 }
 
 val browser : medium
 val medium : medium ref
-val backwards : int -> Template.position -> (int -> Template.position -> live[@u]) -> live array
+val backwards :
+  int ->
+  Template.position ->
+  (int -> Template.position -> 'made[@u]) ->
+  ('made -> Dom.node Js.null -> Dom.node Js.null[@u]) ->
+  'made array
 
 val live :
   hosted ->

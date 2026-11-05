@@ -49,6 +49,11 @@ val loop :
   Ppxlib.expression option
 
 val lowercase :
-  frontend -> loc:Ppxlib.location -> string -> (Ppxlib.arg_label * Ppxlib.expression) list -> Ppxlib.expression
+  frontend ->
+  loc:Ppxlib.location ->
+  attributes:Ppxlib.attributes ->
+  string ->
+  (Ppxlib.arg_label * Ppxlib.expression) list ->
+  Ppxlib.expression
 
 val fragment : frontend -> loc:Ppxlib.location -> Ppxlib.expression list -> Ppxlib.expression

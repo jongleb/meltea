@@ -100,7 +100,7 @@ let rec adopting : View.medium =
         Dom_api.remove_child parent (opening closing 0);
         Dom_api.remove_child parent closing;
         View.Settled);
-    built = (fun [@u] count position make -> View.backwards count position make);
+    built = (fun [@u] count position make front -> View.backwards count position make front);
     aside =
       (fun [@u] build ->
         View.medium := View.browser;
