@@ -12,7 +12,7 @@ type handler = {
 }
 
 type handlers = Closures | Linked of string
-type output = Client_only | Hydratable
+type output = Client_only | Hydratable | Server
 
 let output = ref Client_only
 
@@ -36,6 +36,11 @@ type prop =
   | Static of string * Markup.static  (** Written into the template. *)
   | Dynamic of Markup.site * expression  (** A hole and its value. *)
   | Absent
+
+let float_text ~loc =
+  match !output with
+  | Server -> [%expr Melhole_server.float]
+  | Client_only | Hydratable -> [%expr Js.Float.toString]
 
 let without_jsx attributes =
   match
@@ -113,7 +118,7 @@ let prop frontend ~loc ~label kind requirement value =
         [%expr (Some (string_of_int ([%e value] : int)))]
   | Attribute (name, Decimal), `Required, _ ->
       hole (Attr name)
-        [%expr (Some (Js.Float.toString ([%e value] : float)))]
+        [%expr (Some ([%e float_text ~loc] ([%e value] : float)))]
   | Attribute (name, Text), `Optional, _ ->
       hole (Attr name) [%expr ([%e value] : string option)]
   | Attribute (name, Flag), `Optional, _ ->
@@ -136,7 +141,7 @@ let prop frontend ~loc ~label kind requirement value =
   | Attribute (name, Decimal), `Optional, _ ->
       hole (Attr name)
         [%expr
-          (Option.map Js.Float.toString ([%e value] : float option))]
+          (Option.map [%e float_text ~loc] ([%e value] : float option))]
   | Property (name, kind), requirement, _ -> property (Prop name) kind requirement
   | Controlled (name, kind), requirement, _ -> property (Control name) kind requirement
   | Handler event, requirement, _ ->
@@ -220,7 +225,7 @@ and child frontend item =
             (Markup.Slot
                ( Text_slot,
                  [%expr
-                   (Js.Float.toString ([%e frontend.map value] : float))] ))
+                   ([%e float_text ~loc] ([%e frontend.map value] : float))] ))
       | Some (Text (String_text, value)) ->
           Some
             (Markup.Slot
@@ -235,8 +240,98 @@ and child frontend item =
 
 let row_marker = "melhole.row"
 
+let served frontend ~loc (element : expression Markup.element) key =
+  let writer = [%expr __melhole_writer] in
+  let checks = ref [] in
+  let rec ops (tree : expression Markup.element) =
+    let opening =
+      "<" ^ tree.tag
+      ^ String.concat ""
+          (List.map
+             (fun (name, static) ->
+               match static with
+               | Markup.Valued value -> " " ^ name ^ "=\"" ^ Melhole_server.escape value ^ "\""
+               | Bare -> " " ^ name ^ "=\"\"")
+             tree.statics)
+    in
+    let content = ref None in
+    let attributes =
+      List.filter_map
+        (fun ((site : Markup.site), value) ->
+          match (site, tree.tag) with
+          | Attr name, _ -> Some (`Run [%expr Melhole_server.attribute [%e writer] [%e estring ~loc name] [%e value]])
+          | Prop "innerHTML", _ ->
+              content := Some [%expr Melhole_server.raw [%e writer] [%e value]];
+              None
+          | (Prop "value" | Control "value"), "textarea" ->
+              content := Some [%expr Melhole_server.dynamic_text [%e writer] [%e value]];
+              None
+          | (Prop "value" | Control "value"), _ ->
+              Some (`Run [%expr Melhole_server.attribute [%e writer] "value" (Some [%e value])])
+          | (Prop (("checked" | "selected") as name) | Control (("checked" | "selected") as name)), _ ->
+              Some (`Run [%expr Melhole_server.flag [%e writer] [%e estring ~loc name] [%e value]])
+          | Style, _ -> Some (`Run [%expr Melhole_server.style [%e writer] [%e value]])
+          | (Prop _ | Control _ | Handler _ | Ref | Sole_text), _ -> Some (`Typed [%expr ignore (fun () -> [%e value])]))
+        tree.dynamics
+    in
+    List.iter (fun step -> match step with `Typed run -> checks := run :: !checks | `Run _ -> ()) attributes;
+    let attributes = List.filter_map (fun step -> match step with `Run run -> Some (`Run run) | `Typed _ -> None) attributes in
+    let closing = match Markup.void tree.tag with `Void -> "/>" | `Container -> ">" in
+    let rec children nodes known =
+      match nodes with
+      | [] -> ([], known)
+      | node :: rest ->
+          let now, after =
+            match ((node : expression Markup.node), known) with
+            | Text "", _ -> ([], known)
+            | Text text, `Other -> ([ `Text (Melhole_server.escape text) ], `Text)
+            | Text text, `Text -> ([ `Text ("<!-- -->" ^ Melhole_server.escape text) ], `Text)
+            | Text text, `Unknown ->
+                ([ `Run [%expr Melhole_server.static_text [%e writer] [%e estring ~loc (Melhole_server.escape text)]] ], `Text)
+            | Element child, _ -> (ops child, `Other)
+            | Slot (Text_slot, value), _ -> ([ `Run [%expr Melhole_server.dynamic_text [%e writer] [%e value]] ], `Unknown)
+            | Slot (Child_slot, value), _ -> ([ `Run [%expr Melhole_server.write [%e writer] [%e value]] ], `Unknown)
+          in
+          let later, last = children rest after in
+          (now @ later, last)
+    in
+    let inner = Option.fold ~none:(fst (children tree.children `Other)) ~some:(fun run -> [ `Run run ]) !content in
+    let tail = match Markup.void tree.tag with `Void -> [] | `Container -> [ `Tag ("</" ^ tree.tag ^ ">") ] in
+    (`Tag opening :: attributes) @ (`Tag closing :: inner) @ tail
+  in
+  let steps = ops element in
+  let rec merged steps =
+    match steps with
+    | `Tag first :: `Tag second :: rest -> merged (`Tag (first ^ second) :: rest)
+    | `Tag first :: `Text second :: rest -> merged (`Text (first ^ second) :: rest)
+    | `Text first :: `Text second :: rest -> merged (`Text (first ^ second) :: rest)
+    | `Text first :: `Tag second :: rest -> merged (`Tag (first ^ second) :: rest)
+    | step :: rest -> step :: merged rest
+    | [] -> []
+  in
+  let body =
+    List.fold_right
+      (fun step rest ->
+        let run =
+          match step with
+          | `Tag chunk -> [%expr Melhole_server.markup [%e writer] [%e estring ~loc chunk]]
+          | `Text chunk -> [%expr Melhole_server.markup_text [%e writer] [%e estring ~loc chunk]]
+          | `Run run -> run
+        in
+        [%expr [%e run]; [%e rest]])
+      (List.map (fun run -> `Run run) (List.rev !checks) @ merged steps)
+      [%expr ()]
+  in
+  let instance = frontend.wrap loc [%expr Melhole_server.element (fun __melhole_writer -> [%e body])] in
+  Option.fold ~none:instance
+    ~some:(fun key -> [%expr ignore ([%e key] : string); [%e instance]])
+    key
+
 let lowercase frontend ~loc ~attributes tag arguments =
   let element, key = analyse frontend ~loc tag arguments in
+  match !output with
+  | Server -> served frontend ~loc element key
+  | Client_only | Hydratable ->
   let role =
     match (List.find_opt (fun attribute -> String.equal attribute.attr_name.txt row_marker) attributes, key) with
     | Some _, Some key -> `Row key
@@ -443,7 +538,9 @@ let lowercase frontend ~loc ~attributes tag arguments =
             [%expr Melhole.View.template [%e markup] [%e uncurried [%expr fun _ _ -> ()]]]
         in
         [%expr Melhole.View.row [%e template] 0 [%e uncurried [%expr fun _ () -> ()]] ([%e key] : string)]
-    | [], `Child -> Hoist.hoist ~loc "element" (frontend.wrap loc [%expr Melhole.View.static [%e markup]])
+    | [], `Child ->
+        Hoist.hoist ~loc "element"
+          (frontend.wrap loc (Hoist.hoist ~loc "static" [%expr Melhole.View.static [%e markup]]))
     | _ :: _, _ ->
         let slot_names =
           List.concat
@@ -546,7 +643,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
                   Melhole.View.hydratable [%e markup]
                     [%e uncurried [%expr fun __melhole_scope [%p pvar ~loc (name [])] -> [%e made]]]
                     [%e Lazy.force adopt]]
-            | Client_only ->
+            | Client_only | Server ->
                 [%expr
                   Melhole.View.template [%e markup]
                     [%e uncurried [%expr fun __melhole_scope [%p pvar ~loc (name [])] -> [%e made]]]])
@@ -571,7 +668,10 @@ let lowercase frontend ~loc ~attributes tag arguments =
         key
 
 let loop frontend ~loc ~definitions ~view ~stable ~render row items =
-  match Free.closure ~definitions ~locals:frontend.locals row with
+  match (!output, Free.closure ~definitions ~locals:frontend.locals row) with
+  | Server, _ -> None
+  | (Client_only | Hydratable), closure ->
+  match closure with
   | Volatile -> None
   | Reads names ->
       let inputs values =
@@ -664,5 +764,5 @@ let loop frontend ~loc ~definitions ~view ~stable ~render row items =
 let fragment frontend ~loc items =
   frontend.wrap loc
     [%expr
-      Melhole.View.list
+      [%e match !output with Server -> [%expr Melhole_server.list] | Client_only | Hydratable -> [%expr Melhole.View.list]]
         [%e elist ~loc (List.map (fun item -> frontend.unwrap loc (frontend.map item)) items)]]

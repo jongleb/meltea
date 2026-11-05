@@ -290,4 +290,9 @@ let () =
     (Arg.Unit (fun () -> Element.output := Element.Hydratable))
     ~doc:" compile templates that can take over server-rendered HTML"
 
+let () =
+  Driver.add_arg "-server"
+    (Arg.Unit (fun () -> Element.output := Element.Server))
+    ~doc:" compile views to code that writes their HTML, for meltea.server, natively or under Melange"
+
 let () = Driver.register_transformation "meltea" ~impl:structure

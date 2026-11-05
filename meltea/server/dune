@@ -1,0 +1,6 @@
+(library
+ (name meltea_server)
+ (public_name meltea.server)
+ (wrapped false)
+ (modes native melange)
+ (libraries melhole.server))

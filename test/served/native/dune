@@ -1,0 +1,19 @@
+(copy_files
+ (files ../pages.mlx))
+
+(executable
+ (name corpus)
+ (libraries meltea.server)
+ (preprocess
+  (pps meltea-ppx -server)))
+
+(rule
+ (targets corpus.json)
+ (action
+  (with-stdout-to
+   corpus.json
+   (run ./corpus.exe))))
+
+(alias
+ (name runtest-js)
+ (deps corpus.json))

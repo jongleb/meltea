@@ -3,6 +3,8 @@ open Testing
 external input_value : Dom.node -> string = "value" [@@mel.get]
 external input_checked : Dom.node -> bool = "checked" [@@mel.get]
 external select_all : Dom.element -> string -> Dom.nodeList = "querySelectorAll" [@@mel.send]
+external clone : Dom.element -> (_[@mel.as {json|true|json}]) -> Dom.element = "cloneNode" [@@mel.send]
+external remove_attribute : Dom.node -> string -> unit = "removeAttribute" [@@mel.send]
 
 type item = { id : int; title : string; finished : bool }
 
@@ -96,7 +98,9 @@ let steps tape =
   go init (6 + draw tape 30) []
 
 let snapshot root =
-  ( shapes (as_node root),
+  let copy = clone root in
+  Array.iter (fun node -> remove_attribute node "checked") (nodes (select_all copy "input"));
+  ( shapes (as_node copy),
     Array.to_list
       (Array.map
          (fun node -> (input_value node, input_checked node))

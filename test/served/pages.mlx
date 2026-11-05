@@ -1,0 +1,98 @@
+type item = { id : int; label : string; finished : bool }
+
+type model = {
+  title : string;
+  note : string option;
+  count : int;
+  ratio : float;
+  items : item list;
+  field : string;
+  flag : bool;
+  tags : string list;
+  shade : string;
+  layout : int;
+}
+
+type message = Toggle of int | Type of string | Press | Pick of string
+
+let words = [| ""; "a"; "b c"; "<&>\"'"; " "; "x"; "1" |]
+
+let floats =
+  [| 0.; 1.; -1.5; 0.1; 1e21; 1e-7; 123456789.125; 3.14159; -0.000001; 1e300; 2.5e-320; 100.; 1e20; 0.3 |]
+
+let decode values =
+  let at = ref 0 in
+  let draw bound =
+    match !at < Array.length values with
+    | true ->
+        let value = values.(!at) in
+        incr at;
+        value mod bound
+    | false -> 0
+  in
+  let word () = words.(draw (Array.length words)) in
+  let title = word () in
+  let note = match draw 3 with 0 -> None | _ -> Some (word ()) in
+  let count = draw 2000 - 1000 in
+  let ratio = floats.(draw (Array.length floats)) in
+  let items =
+    List.init (draw 5) (fun id ->
+        let label = word () in
+        let finished = draw 2 = 1 in
+        { id; label; finished })
+  in
+  let field = word () in
+  let flag = draw 2 = 1 in
+  let tags = List.sort_uniq String.compare (List.init (draw 4) (fun _ -> "t" ^ string_of_int (draw 5))) in
+  let shade = [| ""; "red"; "#0f0" |].(draw 3) in
+  let layout = draw 4 in
+  { title; note; count; ratio; items; field; flag; tags; shade; layout }
+
+let row item =
+  <li key=(string_of_int item.id) className=(if item.finished then "done" else "")>
+    <input type_="checkbox" checked=item.finished onCheck=(fun _ -> Toggle item.id) />
+    (Html.text item.label)
+    (Html.text " ")
+    <span>(Html.int item.id)</span>
+  </li>
+
+let tag name = <b title=name>(Html.text name)</b>
+
+let header model =
+  <header>
+    <h1 className="title">(Html.text model.title)(Html.text "!")</h1>
+    (Html.text "static ")
+    (Html.text model.title)
+    (Html.text " tail")
+    (match model.note with Some note -> <em>(Html.text note)</em> | None -> Html.none)
+  </header>
+
+let view model =
+  <div className="page" title=model.title>
+    (Html.map (fun message -> message) (header model))
+    <p>(Html.int model.count)(Html.text " / ")(Html.float model.ratio)</p>
+    <input value=model.field disabled=model.flag onInput=(fun text -> Type text) />
+    <textarea value=model.field />
+    <label htmlFor="field" tabIndex=model.count ariaHidden=model.flag>(Html.text "field")</label>
+    <ul>(Html.list (List.map row model.items))</ul>
+    (Html.keyed (List.map (fun name -> (name, tag name)) model.tags))
+    <section style=[ ("color", model.shade); ("backgroundColor", model.shade) ]>
+      (match model.layout with
+       | 0 -> Html.none
+       | 1 -> Html.text model.field
+       | 2 -> Html.list [ Html.text model.field; Html.text model.title ]
+       | _ -> <i>(Html.text model.field)</i>)
+    </section>
+    <br />
+    <button onClick=Press disabled=model.flag>(Html.text "go")</button>
+    (Html.memo (fun model -> <small>(Html.float model.ratio)</small>) model)
+    (Html.transition ~name:"fade" (match model.flag with true -> <b>(Html.text "on")</b> | false -> Html.none))
+  </div>
+
+let update message model =
+  match message with
+  | Toggle id ->
+      { model with items = List.map (fun item -> if item.id = id then { item with finished = not item.finished } else item) model.items }
+  | Type field -> { model with field }
+  | Press -> { model with count = model.count + 1 }
+  | Pick title -> { model with title }

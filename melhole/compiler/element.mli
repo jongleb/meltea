@@ -42,7 +42,7 @@ type frontend = {
 }
 
 (** Whether compiled templates can take over a server's HTML; the [-hydratable] flag of the ppx. *)
-type output = Client_only | Hydratable
+type output = Client_only | Hydratable | Server
 
 val output : output ref
 val without_jsx : Ppxlib.attributes -> Ppxlib.attributes option

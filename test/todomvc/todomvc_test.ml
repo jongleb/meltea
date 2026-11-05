@@ -372,7 +372,7 @@ let () =
                Program.element ~init:(model, Cmd.none) ~update:Todomvc.update ~view:Todomvc.view
                  ~subscriptions:Todomvc.subscriptions fresh
              in
-             install Melhole.Served.capture;
+             install Melhole_server.capture;
              let rec run root remaining =
                match remaining with
                | [] -> Js.Promise.resolve ()

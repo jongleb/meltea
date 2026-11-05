@@ -1,0 +1,15 @@
+(copy_files
+ (files ../page.mlx))
+
+(executable
+ (name server)
+ (libraries meltea.server)
+ (preprocess
+  (pps meltea-ppx -server)))
+
+(rule
+ (targets index.html)
+ (action
+  (with-stdout-to
+   index.html
+   (run ./server.exe 41))))

@@ -1,0 +1,11 @@
+(copy_files
+ (files ../pages.mlx))
+
+(melange.emit
+ (target output)
+ (alias runtest-js)
+ (libraries meltea melhole.server testing melange.dom)
+ (module_systems
+  (es6 mjs))
+ (preprocess
+  (pps melange.ppx meltea-ppx -hydratable)))

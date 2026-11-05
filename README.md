@@ -58,7 +58,10 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
 - **Server.** `Program.render` writes HTML in React's format, `~start:Program.hydrate` takes it over
   in the browser; compile with `(pps melange.ppx meltea-ppx -hydratable)` to include the code that
-  does it.
+  does it. On a server the same module builds against `meltea.server` with `meltea-ppx -server`:
+  the view compiles to code that writes strings, with no DOM, natively or in Node.
+  `Melhole_server.capture` in the page's head keeps the clicks and typing made before the code
+  arrives, and hydration delivers them.
 - **Transitions.** `Html.transition ~name` and `Html.transition_group ~name` animate what enters,
   leaves and moves with CSS classes, as Vue's `<Transition>` and `<TransitionGroup>`.
 
@@ -139,6 +142,36 @@ The update asks for focus with `Cmd.focus`, `main.mlx` saves through `Cmd.port`,
 comes from `Sub.hash`. A model-based law drives it with real DOM events (typing, Enter, Escape,
 double-click, blur, clicks, hash changes) and checks the page against a plain list of todos
 after every step.
+
+## On a server
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/served-dark.svg">
+  <img src="assets/served.svg" alt="One Meltea module, page.mlx, built twice. meltea-ppx for the browser compiles the view into a template parsed once and cloned, a walk to the output and a refresh that writes the text only when count changed. meltea-ppx -server compiles the same view into code that writes strings with no DOM, natively or in Node: the static markup joined into a few strings at compile time and one call per dynamic part. The server writes HTML in React's format, the same bytes natively and under Melange, and the browser build hydrates it" width="100%">
+</picture>
+
+One module with the model, `update` and `view` builds for both sides
+([`examples/served`](../examples/served)):
+
+```
+(executable                              ; the server, native
+ (name server)
+ (libraries meltea.server)
+ (preprocess (pps meltea-ppx -server)))
+
+(melange.emit                            ; the browser
+ (target app)
+ (libraries meltea)
+ (preprocess (pps melange.ppx meltea-ppx -hydratable)))
+```
+
+```ocaml
+(* server *)
+"<script>" ^ Melhole_server.capture ^ "</script>" ^ "<div id=\"root\">" ^ Program.render ~view:Page.view 41 ^ "</div>"
+
+(* browser *)
+Program.sandbox ~start:Program.hydrate ~init:41 ~update:Page.update ~view:Page.view root
+```
 
 ## API
 

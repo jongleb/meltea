@@ -165,6 +165,7 @@ type mounted
 type cursor
 
 val mismatch : unit -> 'a
+val expected : string -> Dom.node Js.null -> 'a
 val inside : Dom.node -> cursor
 val adopt_element : cursor -> string -> Dom.node
 val adopt_static : cursor -> string -> unit

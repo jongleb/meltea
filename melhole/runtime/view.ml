@@ -29,6 +29,7 @@ type state =
   | List_state of live array
   | Keyed_state of string array * live array
   | Memo_state of input array * live
+  | One_keyed_state of string * live  (** A child with a key outside a list: another key is another child. *)
   | Pure_state of { identity : input; inputs : input array; inner : live }
       (** A function of its inputs; another identity is another kind of child. *)
   | Portal_state of Dom.element * live
@@ -339,7 +340,17 @@ let keyed entries =
         | _ -> None);
   }
 
-let with_key key child = { child with shape = Entry (key, child) }
+let with_key key child =
+  let keep inner = { inner with state = One_keyed_state (key, inner) } in
+  {
+    shape = Entry (key, child);
+    build = (fun [@u] position -> keep (child.build position [@u]));
+    patch =
+      (fun [@u] position live ->
+        match live.state with
+        | One_keyed_state (shown, inner) when String.equal shown key -> Option.map keep (child.patch position inner [@u])
+        | _ -> None);
+  }
 
 (** A row of the next render of a loop: the old row kept as it is, or what to patch it with. *)
 type 'fresh next = Kept of int | Fresh of 'fresh
@@ -865,8 +876,9 @@ let check scope index value =
 module Hole = struct
   type text = { node : Dom.text; mutable value : string }
   type attr = { element : Dom.element; name : string; mutable value : string option }
-  (** What else a property write updates: React keeps an input's [value] attribute in step. *)
-  type echo = Alone | Default_value
+  (** What else a property write updates: React keeps an input's [value] attribute in step, and
+      gives a checkbox the [checked] attribute it had when mounted. *)
+  type echo = Alone | Default_value | Default_checked_at_mount
 
   type prop = { element : Dom.element; name : string; mutable value : input; echo : echo }
   type style = { element : Dom.element; mutable value : (string * string) list }
@@ -910,7 +922,11 @@ let set_prop (hole : Hole.prop) value =
     | Default_value -> (
         match (Dom_api.property hole.element "type" : string) with
         | "number" when Dom_api.same (Dom_api.active_element Dom_api.document) (Js.Null.return hole.element) -> ()
-        | _ -> Dom_api.set_property hole.element "defaultValue" value));
+        | _ -> Dom_api.set_property hole.element "defaultValue" value)
+    | Default_checked_at_mount -> (
+        match Dom_api.same hole.value unset with
+        | true -> Dom_api.set_property hole.element "defaultChecked" value
+        | false -> ()));
     hole.value <- Input value)
 
 let controlled_hole element name =
@@ -922,6 +938,7 @@ let controlled_hole element name =
       echo =
         (match (name, Dom_api.node_name (Dom_api.to_node element)) with
         | "value", ("INPUT" | "TEXTAREA") -> Default_value
+        | "checked", "INPUT" -> Default_checked_at_mount
         | _ -> Alone);
     }
   in
@@ -1123,9 +1140,9 @@ let adopt_finish cursor =
     match Js.Null.toOption node with
     | None -> ()
     | Some found -> (
-        match (Dom_api.node_type found, Dom_api.data found) with
-        | 8, _ | 3, "" -> rest (Dom_api.following_sibling found)
-        | _, _ -> expected "the end of an element" node)
+        match (Dom_api.node_type found, Dom_api.data found, Dom_api.node_name cursor.parent) with
+        | 8, _, _ | 3, "", _ | 3, _, "TEXTAREA" -> rest (Dom_api.following_sibling found)
+        | _, _, _ -> expected "the end of an element" node)
   in
   rest cursor.at
 

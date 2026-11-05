@@ -1,7 +1,4 @@
 let separator = " "
-let capture =
-  {|(function(g,d){var q=[],t=["click","dblclick","input","change","keydown","keyup","submit"],f=function(e){var x=e.target;q.push([e,x.value,x.checked])};t.forEach(function(n){d.addEventListener(n,f,true)});g.__melhole_early=function(){t.forEach(function(n){d.removeEventListener(n,f,true)});delete g.__melhole_early;return q}})(globalThis,document)|}
-
 
 let rec following : View.medium =
   {
@@ -22,13 +19,13 @@ let rec following : View.medium =
         | text, Some found when Dom_api.node_type found = 3 ->
             if not (String.equal (Dom_api.data found) text) then Dom_api.set_data (Dom_api.unsafe_text found) text;
             Dom_api.unsafe_text found
-        | _, (Some _ | None) -> View.mismatch ());
+        | text, (Some _ | None) -> View.expected ("the text \"" ^ text ^ "\"") at);
     root =
       (fun [@u] (position : Template.position) markup ->
         match Js.Null.toOption position.before with
         | Some found when Dom_api.node_type found = 1 && String.equal (Dom_api.node_name found) (Template.tag markup) ->
             Dom_api.unsafe_element found
-        | Some _ | None -> View.mismatch ());
+        | Some _ | None -> View.expected ("<" ^ String.lowercase_ascii (Template.tag markup) ^ ">") position.before);
     placed = (fun [@u] _ _ -> ());
     opened = (fun [@u] _ -> View.Settled);
     built =
@@ -88,7 +85,8 @@ let hydrate child ~parent =
       View.medium := View.browser;
       Dom_api.queue_microtask (fun () -> Events.replay (Dom_api.to_node parent));
       mounted
-  | exception _ ->
+  | exception error ->
+      Js.Console.error error;
       View.medium := View.browser;
       Dom_api.set_text_content (Dom_api.to_node parent) "";
       View.mount child ~parent ~before:None
