@@ -1,20 +1,17 @@
-(** How the handler property of an element is reached by the browser. *)
-type registration =
-  | Delegated  (** One [document] listener walks up from the target. *)
-  | Direct of (Dom.event -> unit)  (** A listener on the element itself. *)
+type registration = Delegated | Direct of (unit -> unit)
 
-type t = {
-  element : Dom.element;
-  event : string;
-  key : string;
-  registration : registration;
-}
-
+let keys = ref []
 let delegated_types = ref []
 
-let bind element event handler =
-  let key = "$$melhole:" ^ event in
-  Dom_api.set_handler element key handler;
+let bind element event =
+  let key =
+    match List.assoc_opt event !keys with
+    | Some key -> key
+    | None ->
+        let key = "$$melhole:" ^ event in
+        keys := (event, key) :: !keys;
+        key
+  in
   let registration =
     match event with
     | "beforeinput" | "click" | "dblclick" | "contextmenu" | "focusin"
@@ -28,8 +25,7 @@ let bind element event handler =
             delegated_types := event :: !delegated_types;
             Dom_api.add_document_listener Dom_api.document event (fun native ->
                 let rec bubble node =
-                  Option.iter (fun handle -> handle native)
-                    (Dom_api.handler node key);
+                  Option.iter (fun handle -> handle native) (Dom_api.handler node key);
                   match Dom_api.cancel_bubble native with
                   | true -> ()
                   | false -> Option.iter bubble (Dom_api.parent_node node)
@@ -38,17 +34,11 @@ let bind element event handler =
         Delegated
     | _ ->
         let listener native =
-          Option.iter (fun handle -> handle native)
-            (Dom_api.handler (Dom_api.to_node element) key)
+          Option.iter (fun handle -> handle native) (Dom_api.handler (Dom_api.to_node element) key)
         in
         Dom_api.add_listener element event listener;
-        Direct listener
+        Direct (fun () -> Dom_api.remove_listener element event listener)
   in
-  { element; event; key; registration }
+  (key, registration)
 
-let set t handler = Dom_api.set_handler t.element t.key handler
-
-let release t =
-  match t.registration with
-  | Delegated -> ()
-  | Direct listener -> Dom_api.remove_listener t.element t.event listener
+let set element key handler = Dom_api.set_handler element key handler

@@ -32,32 +32,38 @@ let plan ~old ~next =
   | false, _ -> { steps; dropped = [] }
   | true, false -> { steps; dropped = List.init (old_stop - old_start) (fun x -> old_start + x) }
   | true, true ->
-      let unclaimed = Array.init (max 0 (old_stop - old_start)) (fun x -> old_start + x) in
-      Array.stable_sort (fun x y -> String.compare (Array.unsafe_get old x) (Array.unsafe_get old y)) unclaimed;
-      let claims = Array.make (Array.length unclaimed) `Unclaimed in
-      let rec first key low high =
-        if low >= high then low
-        else
-          let middle = (low + high) / 2 in
-          if String.compare (Array.unsafe_get old (Array.unsafe_get unclaimed middle)) key < 0 then first key (middle + 1) high
-          else first key low middle
+      let rec capacity size = if size >= 2 * (old_stop - old_start) then size else capacity (2 * size) in
+      let size = capacity 8 in
+      let table = Array.make size (-1) and claims = Array.make old_length `Unclaimed in
+      let slot key =
+        let code = ref 0 in
+        String.iter (fun letter -> code := ((!code * 31) + Char.code letter) land 0x3FFFFFFF) key;
+        !code land (size - 1)
       in
+      for i = old_start to old_stop - 1 do
+        let rec place at =
+          if Array.unsafe_get table at < 0 then Array.unsafe_set table at i else place ((at + 1) land (size - 1))
+        in
+        place (slot (Array.unsafe_get old i))
+      done;
       let rec claim key at =
-        if at < Array.length unclaimed && String.equal (Array.unsafe_get old (Array.unsafe_get unclaimed at)) key then
-          match Array.unsafe_get claims at with
-          | `Unclaimed ->
-              Array.unsafe_set claims at `Claimed;
-              Some (Array.unsafe_get unclaimed at)
-          | `Claimed -> claim key (at + 1)
-        else None
+        let i = Array.unsafe_get table at in
+        if i < 0 then None
+        else
+          match (String.equal (Array.unsafe_get old i) key, Array.unsafe_get claims i) with
+          | true, `Unclaimed ->
+              Array.unsafe_set claims i `Claimed;
+              Some i
+          | true, `Claimed | false, _ -> claim key ((at + 1) land (size - 1))
       in
       let reused = ref [] in
       for j = next_stop - 1 downto next_start do
+        let key = Array.unsafe_get next j in
         Option.iter
           (fun i ->
             Array.unsafe_set steps j (Move i);
             reused := (j, i) :: !reused)
-          (claim (Array.unsafe_get next j) (first (Array.unsafe_get next j) 0 (Array.length unclaimed)))
+          (claim key (slot key))
       done;
       let reused = Array.of_list !reused in
       let tails = Array.make (Array.length reused) 0 in
@@ -83,9 +89,6 @@ let plan ~old ~next =
         Option.iter keep (Array.unsafe_get previous x)
       in
       if !longest > 0 then keep (Array.unsafe_get tails (!longest - 1));
-      let dropped = ref [] in
-      Array.iteri
-        (fun at claim ->
-          match claim with `Unclaimed -> dropped := (Array.unsafe_get unclaimed at) :: !dropped | `Claimed -> ())
-        claims;
-      { steps; dropped = !dropped }
+      { steps; dropped = List.filter
+            (fun i -> match Array.unsafe_get claims i with `Unclaimed -> true | `Claimed -> false)
+            (List.init (old_stop - old_start) (fun x -> old_start + x)) }

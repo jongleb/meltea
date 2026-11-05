@@ -34,7 +34,6 @@ type state =
   | Hosted of hosted
   | Each_state : {
       items : 'item array;
-      children : child array;  (** What each item rendered to. *)
       keys : string array;
       outer : input array;  (** What the rendering reads besides the item. *)
       projections : input array array;  (** Per row, the parts of its rendering that read [outer]. *)
@@ -253,37 +252,38 @@ let keyed entries =
 
 let with_key key child = { child with shape = Entry (key, child) }
 
+(** A row of the next render of a loop: the old row kept as it is, or a description to patch with. *)
+type row = Kept of int | Fresh of child
+
 let each items render project outer =
   let count = Array.length items in
-  let key index child =
-    match child.shape with
-    | Entry (key, _) -> key
-    | Single | Nothing | Many _ | Entries _ | Deferred _ -> string_of_int index
-  in
   let rendered index item =
     let child = render item [@u] in
-    (child, key index child)
+    match child.shape with
+    | Entry (key, inner) -> (inner, key)
+    | Single | Nothing | Many _ | Entries _ | Deferred _ -> (child, string_of_int index)
   in
   {
     shape = Single;
     build =
       (fun [@u] position ->
-        let children = Array.make count empty and keys = Array.make count "" in
-        Array.iteri
-          (fun index item ->
-            let child, key = rendered index item in
-            Array.unsafe_set children index child;
-            Array.unsafe_set keys index key)
-          items;
+        let keys = Array.make count "" in
+        let lives =
+          Array.mapi
+            (fun index item ->
+              let child, key = rendered index item in
+              Array.unsafe_set keys index key;
+              child.build position [@u])
+            items
+        in
         let projections = Array.map (fun item -> project item [@u]) items in
-        let lives = Array.map (fun child -> child.build position [@u]) children in
-        group (Each_state { items; children; keys; outer; projections; lives }) lives);
+        group (Each_state { items; keys; outer; projections; lives }) lives);
     patch =
       (fun [@u] position live ->
         match live.state with
         | Each_state old ->
             let old_count = Array.length old.items in
-            let children = Array.make count empty and keys = Array.make count "" in
+            let rows = Array.make count (Kept 0) and keys = Array.make count "" in
             let projections = Array.make count [||] in
             let outer_change = compare_inputs old.outer outer in
             let shift = ref 0 in
@@ -305,7 +305,7 @@ let each items render project outer =
                        projected
                 in
                 let reuse from =
-                  Array.unsafe_set children index (Array.unsafe_get old.children from);
+                  Array.unsafe_set rows index (Kept from);
                   Array.unsafe_set keys index (Array.unsafe_get old.keys from);
                   Array.unsafe_set projections index
                     (Option.value ~default:(Array.unsafe_get old.projections from) projected)
@@ -319,11 +319,16 @@ let each items render project outer =
                   reuse (index + !shift))
                 else (
                   let child, key = rendered index item in
-                  Array.unsafe_set children index child;
+                  Array.unsafe_set rows index (Fresh child);
                   Array.unsafe_set keys index key;
                   Array.unsafe_set projections index
                     (match projected with Some projection -> projection | None -> project item [@u])))
               items;
+            let described index =
+              match Array.unsafe_get rows index with
+              | Fresh child -> child
+              | Kept _ -> fst (rendered index (Array.unsafe_get items index))
+            in
             let rec order index =
               match index = count with
               | true -> `Same
@@ -344,17 +349,18 @@ let each items render project outer =
                 in
                 let rec refresh index =
                   if index >= 0 then (
-                    let child = Array.unsafe_get children index in
-                    if not (Dom_api.same child (Array.unsafe_get old.children index)) then
-                      Array.unsafe_set lives index
-                        (update
-                           { position with before = ahead (index + 1) }
-                           (Array.unsafe_get old.lives index)
-                           child);
+                    (match Array.unsafe_get rows index with
+                    | Kept from when from = index -> ()
+                    | Kept _ | Fresh _ ->
+                        Array.unsafe_set lives index
+                          (update
+                             { position with before = ahead (index + 1) }
+                             (Array.unsafe_get old.lives index)
+                             (described index)));
                     refresh (index - 1))
                 in
                 refresh (count - 1);
-                Some (group (Each_state { items; children; keys; outer; projections; lives }) lives)
+                Some (group (Each_state { items; keys; outer; projections; lives }) lives)
             | _, (`Same | `Moved) ->
                 let plan = Reconcile.plan ~old:old.keys ~next:keys in
                 (match (List.compare_length_with plan.dropped old_count, extent position live) with
@@ -364,22 +370,21 @@ let each items render project outer =
                 | _, (Whole | Part) ->
                     List.iter (fun i -> remove position (Array.unsafe_get old.lives i)) plan.dropped);
                 let carried at i j =
-                  let child = Array.unsafe_get children j in
-                  match Dom_api.same child (Array.unsafe_get old.children i) with
-                  | true -> Array.unsafe_get old.lives i
-                  | false -> update at (Array.unsafe_get old.lives i) child
+                  match Array.unsafe_get rows j with
+                  | Kept from when from = i -> Array.unsafe_get old.lives i
+                  | Kept _ | Fresh _ -> update at (Array.unsafe_get old.lives i) (described j)
                 in
                 let lives =
                   backwards count position (fun [@u] j at ->
                       match Array.unsafe_get plan.steps j with
-                      | Create -> (Array.unsafe_get children j).build at [@u]
+                      | Create -> (described j).build at [@u]
                       | Keep i -> carried at i j
                       | Move i ->
                           let live = carried at i j in
                           live.each (fun [@u] node -> insert at node) [@u];
                           live)
                 in
-                Some (group (Each_state { items; children; keys; outer; projections; lives }) lives))
+                Some (group (Each_state { items; keys; outer; projections; lives }) lives))
         | _ -> None);
   }
 
@@ -529,7 +534,7 @@ module Hole = struct
   type prop = { element : Dom.element; name : string; mutable value : input }
   type style = { element : Dom.element; mutable value : (string * string) list }
   type classes = { element : Dom.element; mutable value : string list }
-  type handler = { binding : Events.t }
+  type handler = { element : Dom.element; key : string }
   type reference = { scope : scope; element : Dom.element; mutable callback : Dom.element -> unit }
   type content = { position : Template.position; mutable source : child; mutable live : live }
 end
@@ -600,11 +605,13 @@ let set_classes (hole : Hole.classes) value =
     hole.value <- value)
 
 let handler_hole scope element event =
-  let binding = Events.bind element event ignore in
-  scope.cleanups <- (fun [@u] () -> Events.release binding) :: scope.cleanups;
-  ({ binding } : Hole.handler)
+  let key, registration = Events.bind element event in
+  (match registration with
+  | Events.Delegated -> ()
+  | Events.Direct remove -> scope.cleanups <- (fun [@u] () -> remove ()) :: scope.cleanups);
+  ({ element; key } : Hole.handler)
 
-let set_handler (hole : Hole.handler) next = Events.set hole.binding next
+let set_handler (hole : Hole.handler) next = Events.set hole.element hole.key next
 
 let reference_hole scope element =
   let hole : Hole.reference = { scope; element; callback = ignore } in
