@@ -38,6 +38,11 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   <img src="assets/compiled.svg" alt="The counter in Meltea: you write the view in mlx; Meltea compiles it into a template tree of div, two buttons and an output whose text is the only hole; when + is clicked the update makes count 42, the compiled code compares count with its last value and writes 42 into that one text node; the grey static nodes get no DOM writes; there is no virtual DOM" width="100%">
 </picture>
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/speed-dark.svg">
+  <img src="assets/speed.svg" alt="Benchmark: within ×1.2 of hand-written JavaScript. js-framework-benchmark's keyed operations in headless Chrome, slowdown against vanilla JS, lower is better: vanilla 1.00, Meltea 1.15, Melact 1.17, React 18 1.70. JS bundle of the benchmark app, gzip: vanilla 1.4 kB, Meltea 9.0, Melact 9.9, React 18 45.6. Heap with 1,000 rows: vanilla 0.77 MB, Meltea 1.22, Melact 1.64, React 18 3.17. Swapping two rows of 1,000: Meltea 1.12, Melact 1.17, React 18 5.86" width="100%">
+</picture>
+
 ## How it works
 
 - **Templates.** `meltea-ppx` turns the static part of every view into HTML, parsed once into a
