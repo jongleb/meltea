@@ -983,7 +983,6 @@ let set_style (hole : Hole.style) value =
     let style = Dom_api.style hole.element in
     List.iter (fun (name, _) -> Dom_api.set_style style name "") hole.value;
     List.iter (fun (name, value) -> Dom_api.set_style style name value) value;
-    (match value with [] -> Dom_api.remove_attribute hole.element "style" | _ :: _ -> ());
     hole.value <- value)
 
 let classes_hole element : Hole.classes = { element; value = [] }

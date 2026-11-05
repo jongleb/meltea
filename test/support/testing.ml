@@ -132,6 +132,18 @@ and shape node =
         (Array.to_list (Array.map (fun name -> (name, attribute node name)) (attribute_names node))),
       shapes node )
 
+let rec without_empty_style shown =
+  List.map
+    (fun shape ->
+      match shape with
+      | Element_shape (tag, attributes, children) ->
+          Element_shape
+            ( tag,
+              List.filter (fun (name, value) -> not (String.equal name "style" && String.equal value "")) attributes,
+              without_empty_style children )
+      | Text_shape _ -> shape)
+    shown
+
 let longest_increasing values =
   let values = Array.of_list values in
   let best = Array.make (Array.length values) 1 in
