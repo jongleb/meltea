@@ -23,6 +23,14 @@ external css_text : Dom.cssStyleDeclaration -> string = "cssText" [@@mel.get]
 external style_value : Dom.cssStyleDeclaration -> string -> string = "" [@@mel.get_index]
 external attribute : Dom.element -> string -> string Js.null = "getAttribute" [@@mel.send]
 
+(** A running CSS transition or animation, as the Web Animations API gives it. *)
+type animation
+
+external animating : Dom.element -> (unit -> unit) Js.undefined = "getAnimations" [@@mel.get]
+external animations : Dom.element -> animation array = "getAnimations" [@@mel.send]
+external finished : animation -> unit Js.Promise.t = "finished" [@@mel.get]
+external all : unit Js.Promise.t array -> unit Js.Promise.t = "all" [@@mel.scope "Promise"]
+
 let running = "$$melhole:phase"
 
 let stop element =
@@ -106,9 +114,19 @@ let run ~name ~duration phase element ~finish =
                 finish ()
             | Stale -> ()
           in
-          match Option.value duration ~default:(measured ()) with
-          | 0 -> ended ()
-          | wait -> Dom_api.set_timeout ended wait))
+          let timed wait = match wait with 0 -> ended () | wait -> Dom_api.set_timeout ended wait in
+          match (duration, Js.Undefined.toOption (animating element)) with
+          | Some wait, _ -> timed wait
+          | None, None -> timed (measured ())
+          | None, Some _ -> (
+              match animations element with
+              | [||] -> ended ()
+              | running ->
+                  let settle _ =
+                    ended ();
+                    Js.Promise.resolve ()
+                  in
+                  ignore (Js.Promise.catch settle (Js.Promise.then_ settle (all (Array.map finished running)))))))
 
 let transition motion ~name ?duration child =
   let element node = match Dom_api.node_type node with 1 -> Some (Dom_api.unsafe_element node) | _ -> None in
@@ -163,6 +181,7 @@ let transition motion ~name ?duration child =
             (match (placed (Js.Null.return node), element node) with
             | None, Some leaving ->
                 Dom_api.insert_before position.parent leaving here;
+                Dom_api.set_attribute leaving "inert" "";
                 shown.leaving <- leaving :: shown.leaving;
                 run ~name ~duration Leaving leaving ~finish:(fun () ->
                     shown.leaving <- List.filter (fun other -> not (Dom_api.same other leaving)) shown.leaving;
