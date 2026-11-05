@@ -23,12 +23,22 @@ let bind element event =
         | Some _ -> ()
         | None ->
             delegated_types := event :: !delegated_types;
+            let pointing =
+              match event with
+              | "click" | "dblclick" | "mousedown" | "mousemove" | "mouseup" -> `Mouse
+              | _ -> `Other
+            in
             Dom_api.add_document_listener Dom_api.document event (fun native ->
                 let rec bubble node =
                   Option.iter
                     (fun handle ->
-                      Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
-                      handle native)
+                      match (pointing, Dom_api.node_name node) with
+                      | `Mouse, ("BUTTON" | "INPUT" | "SELECT" | "TEXTAREA")
+                        when (Dom_api.property (Dom_api.unsafe_element node) "disabled" : bool) ->
+                          ()
+                      | (`Mouse | `Other), _ ->
+                          Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
+                          handle native)
                     (Dom_api.handler node key);
                   match Dom_api.cancel_bubble native with
                   | true -> ()
