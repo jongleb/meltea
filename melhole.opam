@@ -5,6 +5,8 @@ synopsis:
 maintainer: ["Gleb"]
 authors: ["Gleb"]
 license: "MIT"
+homepage: "https://github.com/jongleb/melact"
+bug-reports: "https://github.com/jongleb/melact/issues"
 depends: [
   "ocaml" {>= "5.3"}
   "dune" {>= "3.16" & >= "3.16"}
@@ -29,3 +31,4 @@ build: [
     "@doc" {with-doc}
   ]
 ]
+dev-repo: "git+https://github.com/jongleb/melact.git"

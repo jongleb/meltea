@@ -48,7 +48,7 @@
 
 (package
  (name meltea-ppx)
- (synopsis "mlx views with messages, compiled to templates, for Meltea")
+ (synopsis "Meltea's mlx views with messages, compiled to templates")
  (depends
   (ocaml (>= 5.3))
   (dune (>= 3.16))
