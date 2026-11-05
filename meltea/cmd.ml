@@ -9,6 +9,11 @@ external focus_element : Dom.element -> unit = "focus" [@@mel.send]
 
 type 'msg t = Effects of (('msg -> unit) -> unit) list [@@unboxed]
 
+(** How the next draw shows its changes: at once, or as a view transition of the browser. *)
+type drawing = Instant | View_transition
+
+let drawing = ref Instant
+
 let none = Effects []
 let batch commands = Effects (List.concat_map (fun (Effects jobs) -> jobs) commands)
 
@@ -38,5 +43,6 @@ let focus id =
                Option.iter focus_element (element_by_id document id))));
     ]
 
+let view_transition = Effects [ (fun _ -> drawing := View_transition) ]
 let port send value = Effects [ (fun _ -> send value) ]
 let run (Effects jobs) dispatch = List.iter (fun job -> job dispatch) jobs

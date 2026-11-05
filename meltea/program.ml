@@ -12,7 +12,7 @@ type reads = Reads : { analysed : 'view; fields : int } -> reads | Unread
 (** The type declarations of the module that defines [update], as a digest. *)
 type shape = Shape of string | Unshaped
 
-type 'msg tracking = { changes : 'msg -> int; reads : int; shape : shape }
+type 'msg tracking = { changes : 'msg -> int; reads : int; shape : shape; listens : int }
 
 external same : 'a -> 'b -> bool = "%eq"
 
@@ -50,28 +50,47 @@ let carried ~start ~tracking root =
 (** What a kind of program does around the shared loop: apply a message, follow a drawn model, stop. *)
 type ('model, 'msg) course = {
   step : 'msg -> 'model -> ('msg -> unit) -> 'model;
-  drawn : 'model -> ('msg -> unit) -> unit;
+  drawn : int -> 'model -> ('msg -> unit) -> unit;
   halted : ('msg -> unit) -> unit;
 }
 
+external start_view_transition : (unit -> unit) -> unit = "startViewTransition" [@@mel.scope "document"]
+external view_transitions : (unit -> unit) Js.undefined = "startViewTransition" [@@mel.scope "document"]
+
 let launch course ~tracking ~mode ~view initial root =
   let model = ref initial and schedule = ref Idle and sink = ref ignore and pending = ref 0 in
+  let drawing = ref Cmd.Instant in
   let dispatch message = !sink message in
   let mounted =
     mode.take (Html.render (view initial) dispatch) root
   in
+  let patch () =
+    let changed = !pending in
+    if changed land tracking.reads <> 0 then View.patch mounted (Html.render (view !model) dispatch);
+    pending := 0;
+    if changed land tracking.listens <> 0 then course.drawn changed !model dispatch
+  in
   let draw () =
     match !schedule with
     | Idle -> ()
-    | Queued | Framed ->
+    | Queued | Framed -> (
         schedule := Idle;
-        if !pending land tracking.reads <> 0 then View.patch mounted (Html.render (view !model) dispatch);
-        pending := 0;
-        course.drawn !model dispatch
+        match (!drawing, Js.Undefined.toOption view_transitions) with
+        | Cmd.View_transition, Some _ ->
+            drawing := Cmd.Instant;
+            start_view_transition patch
+        | (Cmd.Instant | Cmd.View_transition), _ ->
+            drawing := Cmd.Instant;
+            patch ())
   in
   sink :=
     (fun message ->
       model := course.step message !model dispatch;
+      (match !Cmd.drawing with
+      | Cmd.View_transition ->
+          drawing := Cmd.View_transition;
+          Cmd.drawing := Cmd.Instant
+      | Cmd.Instant -> ());
       pending := !pending lor tracking.changes message;
       match (!schedule, !Events.pace) with
       | Queued, _ | Framed, Continuous -> ()
@@ -92,14 +111,22 @@ let launch course ~tracking ~mode ~view initial root =
     (Js.Undefined.return { built = tracking.shape; current = (fun () -> !model); leave = halt });
   { send = dispatch; draw; halt }
 
-let everything = { changes = (fun _ -> -1); reads = -1; shape = Unshaped }
+let everything = { changes = (fun _ -> -1); reads = -1; shape = Unshaped; listens = -1 }
 
 let mutable_read = ()
 
-let track ~update ~changes ~view ~reads ~shape =
+let track ~update ~changes ~view ~reads ~shape ~subscriptions ~listens =
   match (changes, reads) with
   | Changes found, Reads read when same found.analysed update && same read.analysed view ->
-      { changes = found.fields; reads = read.fields; shape }
+      {
+        changes = found.fields;
+        reads = read.fields;
+        shape;
+        listens =
+          (match listens with
+          | Reads heard when same heard.analysed subscriptions -> heard.fields
+          | Reads _ | Unread -> -1);
+      }
   | (Changes _ | Unanalysed), (Reads _ | Unread) -> { everything with shape }
 
 let element ?(tracking = everything) ?(start = mount) ~init ~update ~view ~subscriptions root =
@@ -115,7 +142,7 @@ let element ?(tracking = everything) ?(start = mount) ~init ~update ~view ~subsc
             let next, commands = update message model in
             Cmd.run commands dispatch;
             next);
-        drawn = (fun model dispatch -> Sub.apply active (subscriptions model) dispatch);
+        drawn = (fun _ model dispatch -> Sub.apply active (subscriptions model) dispatch);
         halted = (fun dispatch -> Sub.apply active Sub.none dispatch);
       }
       ~tracking ~mode:start ~view initial root
@@ -126,7 +153,7 @@ let element ?(tracking = everything) ?(start = mount) ~init ~update ~view ~subsc
 
 let sandbox ?(tracking = everything) ?(start = mount) ~init ~update ~view root =
   launch
-    { step = (fun message model _ -> update message model); drawn = (fun _ _ -> ()); halted = ignore }
+    { step = (fun message model _ -> update message model); drawn = (fun _ _ _ -> ()); halted = ignore }
     ~tracking ~mode:start ~view (Option.value ~default:init (carried ~start ~tracking root)) root
 
 let render ~view model = Served.render (Html.render (view model) ignore)

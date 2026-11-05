@@ -31,7 +31,15 @@ val mutable_read : unit
   mutable_model
     "this model field can change in place, and Meltea redraws only when the model value changes: keep the model immutable"]
 
-val track : update:'update -> changes:'msg changes -> view:'view -> reads:reads -> shape:shape -> 'msg tracking
+val track :
+  update:'update ->
+  changes:'msg changes ->
+  view:'view ->
+  reads:reads ->
+  shape:shape ->
+  subscriptions:'subscriptions ->
+  listens:reads ->
+  'msg tracking
 
 val sandbox :
   ?tracking:'msg tracking ->

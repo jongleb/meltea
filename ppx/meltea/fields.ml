@@ -87,6 +87,7 @@ let view expression =
   match expression.pexp_desc with
   | Pexp_function ([ { pparam_desc = Pparam_val (Nolabel, None, pattern); _ } ], _, Pfunction_body body) -> (
       match pattern.ppat_desc with
+      | Ppat_any -> Some 0
       | Ppat_record (fields, _) -> Some (mask (Named (List.map (fun ({ txt; _ }, _) -> Longident.last_exn txt) fields)))
       | Ppat_var { txt = model; _ } ->
           let reader =

@@ -9,3 +9,4 @@ val message : 'msg -> 'msg t
 val perform : (unit -> 'promise) -> ('value -> 'msg) -> 'msg t
 val focus : string -> 'msg t
 val port : ('value -> unit) -> 'value -> 'msg t
+val view_transition : 'msg t

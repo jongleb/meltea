@@ -48,7 +48,8 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   `===`; only the holes that read a changed one are evaluated and written. Pure views and
   immutable values make this exact: an unchanged reference is an unchanged value.
 - **Fields.** The compiler reads `update` and `view`: which model fields each message can change,
-  which fields the view reads. A message that changes nothing the view reads does not call it.
+  which fields the view reads. A message that changes nothing the view reads does not call it, and
+  `subscriptions` are asked again only when a field they read changed.
 - **Remembered values.** `let shown = List.filter … model.items` at the top of a view is computed
   again only when `model.items` or another input changed; otherwise it is the same list, and the
   holes that read it are skipped, so typing in a field does not check the list's rows.
@@ -90,7 +91,8 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   `Melhole_server.capture` in the page's head keeps the clicks and typing made before the code
   arrives, and hydration delivers them.
 - **Transitions.** `Html.transition ~name` and `Html.transition_group ~name` animate what enters,
-  leaves and moves with CSS classes, as Vue's `<Transition>` and `<TransitionGroup>`.
+  leaves and moves with CSS classes, as Vue's `<Transition>` and `<TransitionGroup>`;
+  `Cmd.view_transition` from an update draws inside the browser's View Transitions.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/fields-dark.svg">
@@ -209,7 +211,7 @@ Option.iter
 |---|---|
 | `Program` | `sandbox ~init ~update ~view root`, `element ~init ~update ~view ~subscriptions root`, `dispatch`, `flush`, `stop`; `render ~view model` for the server and `~start:Program.hydrate` to take its HTML over |
 | `Html` | `text`, `int`, `float`, `none`, `list`, `keyed`, `map`, `memo` (Elm's `lazy`), `transition` and `transition_group` (`~name`, `?duration`) |
-| `Cmd` | `none`, `batch`, `map`, `message`, `perform` (a promise), `focus` (an element by id, after the next draw), `port` (a value out to JavaScript) |
+| `Cmd` | `none`, `batch`, `map`, `message`, `perform` (a promise), `focus` (an element by id, after the next draw), `port` (a value out to JavaScript), `view_transition` (the next draw inside `document.startViewTransition`) |
 | `Sub` | `none`, `batch`, `map`, `every`, `hash` (the URL fragment) |
 
 Attributes are the familiar DOM props (`className`, `value`, `checked`, `disabled`, …) with

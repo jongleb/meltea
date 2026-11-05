@@ -171,9 +171,9 @@ let mapper =
                                     || super#expression expression found
                                 end
                               in
-                              match finder#expression pvb_expr false with
-                              | true -> Some reads
-                              | false -> None)))
+                              match (finder#expression pvb_expr false, name) with
+                              | true, _ | false, "subscriptions" -> Some reads
+                              | false, _ -> None)))
               | _ -> []
             in
             Hoist.structure (fun item -> self#structure_item (Remember.structure_item item)) [ item ] @ companions)
@@ -268,6 +268,9 @@ let mapper =
               Option.bind (named "view") (fun view -> Option.map (fun found -> (found, view)) (path view)) )
           with
           | Some (update_path, update), Some (view_path, view) ->
+              let listening =
+                Option.bind (named "subscriptions") (fun found -> Option.map (fun at -> (at, found)) (path found))
+              in
               super#expression
                 {
                   expression with
@@ -280,7 +283,15 @@ let mapper =
                               ~changes:[%e companion "changes" [%expr Program.Unanalysed] update_path]
                               ~view:[%e view]
                               ~reads:[%e companion "reads" [%expr Program.Unread] view_path]
-                              ~shape:[%e companion "shape" [%expr Program.Unshaped] update_path]] )
+                              ~shape:[%e companion "shape" [%expr Program.Unshaped] update_path]
+                              ~subscriptions:
+                                [%e
+                                  Option.fold ~none:[%expr ()] ~some:(fun (_, subscriptions) -> subscriptions) listening]
+                              ~listens:
+                                [%e
+                                  Option.fold ~none:[%expr Program.Unread]
+                                    ~some:(fun (at, _) -> companion "reads" [%expr Program.Unread] at)
+                                    listening]] )
                         :: arguments );
                 }
           | _ -> super#expression expression)

@@ -785,7 +785,7 @@ let () =
                  Program.sandbox ~start:Program.hot
                    ~tracking:
                      (Program.track ~update ~changes:Program.Unanalysed ~view:Second.view ~reads:Program.Unread
-                        ~shape:(Program.Shape "other"))
+                        ~shape:(Program.Shape "other") ~subscriptions:() ~listens:Program.Unread)
                    ~init ~update ~view:Second.view root
            in
            let shown = snapshot root in
@@ -802,4 +802,94 @@ let () =
            remove_root root;
            remove_root fresh;
            expect (shown = wanted, still = wanted) |. to_equal (true, true)))
+        [%mel.obj { numRuns = 300 }]))
+
+let stub_transitions : unit -> unit =
+  [%mel.raw {|function () { globalThis.__transitions = []; globalThis.__started = 0; document.startViewTransition = function (update) { globalThis.__started++; globalThis.__transitions.push(update); }; }|}]
+
+let finish_transitions : unit -> int =
+  [%mel.raw {|function () { var due = globalThis.__transitions; globalThis.__transitions = []; due.forEach(function (f) { f(); }); return globalThis.__started; }|}]
+
+let drop_transitions : unit -> unit = [%mel.raw {|function () { delete document.startViewTransition; }|}]
+
+let () =
+  describe "Meltea view transitions" (fun () ->
+    test "a draw runs inside startViewTransition exactly when an update since the last one asked for it, and shows the view" (fun () ->
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           let tape = tape values in
+           let available = draw tape 2 in
+           (match available with 0 -> stub_transitions () | _ -> drop_transitions ());
+           let asked = ref [] in
+           let animated message = match message with Add | Remove _ -> true | Type _ | Toggle _ | Show _ | Same -> false in
+           let steps = steps tape in
+           let root = create_element document "div" and fresh = create_element document "div" in
+           let program =
+             Program.element ~init:(init, Cmd.none)
+               ~update:(fun message model ->
+                 asked := animated message :: !asked;
+                 (update message model, match animated message with true -> Cmd.view_transition | false -> Cmd.none))
+               ~view ~subscriptions:(fun _ -> Sub.none) root
+           in
+           let expected = ref 0 and since = ref false in
+           List.iter
+             (fun step ->
+               match step with
+               | Send message -> (
+                   Program.dispatch program message;
+                   match animated message with true -> since := true | false -> ())
+               | Flush ->
+                   Program.flush program;
+                   if !since then incr expected;
+                   since := false)
+             (steps @ [ Flush ]);
+           let started = match available with 0 -> finish_transitions () | _ -> !expected in
+           let shown = Program.sandbox ~init:(final steps) ~update ~view fresh in
+           let same = snapshot root = snapshot fresh in
+           Program.stop program;
+           Program.stop shown;
+           drop_transitions ();
+           expect (started, same) |. to_equal (!expected, true)))
+        [%mel.obj { numRuns = 300 }]))
+
+let listened = ref 0
+
+module Listening = struct
+  let update message model =
+    match message with
+    | (Show filter : message) -> ({ model with filter }, Cmd.none)
+    | (Type _ | Add | Toggle _ | Remove _ | Same) as other ->
+        let next = update other model in
+        ({ model with items = next.items; draft = next.draft; next = next.next }, Cmd.none)
+
+  let subscriptions model =
+    incr listened;
+    match model.filter with All -> Sub.none | Active | Completed -> Sub.every 100000 (fun _ -> Same)
+end
+
+let () =
+  describe "Meltea subscriptions" (fun () ->
+    test "subscriptions are asked again exactly after the draws that changed a field they read" (fun () ->
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           let steps = steps (tape values) in
+           let root = create_element document "div" in
+           listened := 0;
+           let program =
+             Program.element ~init:(init, Cmd.none) ~update:Listening.update ~view ~subscriptions:Listening.subscriptions root
+           in
+           let expected = ref 1 and shown = ref false in
+           List.iter
+             (fun step ->
+               match step with
+               | Send (Show _) -> shown := true
+               | Send (Type _ | Add | Toggle _ | Remove _ | Same) -> ()
+               | Flush ->
+                   if !shown then incr expected;
+                   shown := false)
+             (steps @ [ Flush ]);
+           run program steps;
+           let asked = !listened in
+           Program.stop program;
+           expect asked |. to_be !expected))
         [%mel.obj { numRuns = 300 }]))
