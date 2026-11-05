@@ -170,7 +170,10 @@ val adopt_element : cursor -> string -> Dom.node
 val adopt_static : cursor -> string -> unit
 val adopt_anchor : cursor -> unit
 val adopt_text : cursor -> string -> Dom.text
-val adopt_content : scope -> cursor -> child -> Hole.content
+(** What follows a content hole in its template: whatever comes next, or an anchor the hole ends at. *)
+type ending = Before_next | Before_anchor
+
+val adopt_content : scope -> cursor -> child -> ending -> Hole.content
 val adopt_finish : cursor -> unit
 val collected : Hole.content -> child
 val collected_text : Dom.text -> string

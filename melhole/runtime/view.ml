@@ -934,6 +934,7 @@ let controlled_hole element name =
   in
   Dom_api.add_listener element "input" restore;
   Dom_api.add_listener element "change" restore;
+  Dom_api.set_handler element Events.controlled restore;
   hole
 
 let style_hole element : Hole.style = { element; value = [] }
@@ -1082,11 +1083,17 @@ let adopt_static cursor text =
       cursor.at <- Dom_api.following_sibling node
   | Some _ | None -> expected ("the text \"" ^ text ^ "\"") (separated cursor.at)
 
-let adopt_anchor cursor =
+let anchor cursor =
   match Js.Null.toOption cursor.at with
-  | Some node when Dom_api.node_type node = 8 -> cursor.at <- Dom_api.following_sibling node
+  | Some node when Dom_api.node_type node = 8 ->
+      cursor.at <- Dom_api.following_sibling node;
+      node
   | Some _ | None ->
-      Dom_api.insert_before cursor.parent (Dom_api.create_text_node Dom_api.document "") cursor.at
+      let made = Dom_api.to_node (Dom_api.create_text_node Dom_api.document "") in
+      Dom_api.insert_before cursor.parent made cursor.at;
+      made
+
+let adopt_anchor cursor = ignore (anchor cursor)
 
 let adopt_text cursor value =
   match (value, Js.Null.toOption (separated cursor.at)) with
@@ -1100,12 +1107,14 @@ let adopt_text cursor value =
       Dom_api.unsafe_text node
   | _, (Some _ | None) -> expected ("the text \"" ^ value ^ "\"") (separated cursor.at)
 
-let adopt_content scope cursor child =
+(** What follows a content hole in its template: whatever comes next, or an anchor the hole ends at. *)
+type ending = Before_next | Before_anchor
+
+let adopt_content scope cursor child ending =
   let live = child.build { Template.parent = cursor.parent; before = cursor.at } [@u] in
   cursor.at <- after_of live cursor.at [@u];
-  let hole : Hole.content =
-    { position = { parent = cursor.parent; before = cursor.at }; source = child; live; range = Settled }
-  in
+  let before = match ending with Before_next -> cursor.at | Before_anchor -> Js.Null.return (anchor cursor) in
+  let hole : Hole.content = { position = { parent = cursor.parent; before }; source = child; live; range = Settled } in
   scope.cleanups <- (fun [@u] () -> hole.live.release () [@u]) :: scope.cleanups;
   hole
 
@@ -1167,32 +1176,41 @@ let tpl_instance markup values =
     let paths = Template.paths markup in
     let elements = ref [] in
     let adopted = Array.make (Array.length paths) None in
-    let slot cursor index =
+    let slot cursor index ending =
       Array.unsafe_set adopted index
         (match (Array.unsafe_get paths index, Array.unsafe_get values index) with
         | Text _, HText text -> Some (Text_hole { node = adopt_text cursor text; value = text })
-        | Child _, HChild child -> Some (Content_hole (adopt_content scope cursor child))
+        | Child _, HChild child -> Some (Content_hole (adopt_content scope cursor child ending))
         | _, _ -> mismatch ())
     in
     let rec walk shape server path =
       elements := (path, server) :: !elements;
       let cursor = inside (Dom_api.to_node server) in
       let rec step node index =
+        let ending =
+          match Option.map (fun current -> (Dom_api.node_type current, Dom_api.data current)) node with
+          | Some ((3, "") | (8, _)) -> Before_anchor
+          | Some _ | None -> Before_next
+        in
+        let taken = ref Before_next in
         Array.iteri
           (fun at hole ->
             match hole with
-            | Template.Text (parent, before) | Child (parent, before)
-              when before = index && List.equal Int.equal parent path ->
-                slot cursor at
+            | Template.Text (parent, before) when before = index && List.equal Int.equal parent path ->
+                slot cursor at Before_next
+            | Child (parent, before) when before = index && List.equal Int.equal parent path ->
+                slot cursor at ending;
+                taken := ending
             | Text _ | Child _ | Attr _ | Prop _ | Handler _ | Ref _ | Style _ | Class_list _ -> ())
           paths;
         Option.iter
           (fun current ->
-            (match (Dom_api.node_type current, Dom_api.data current) with
-            | 1, _ ->
+            (match (Dom_api.node_type current, Dom_api.data current, !taken) with
+            | 1, _, _ ->
                 walk current (adopt_element cursor (Dom_api.node_name current)) (path @ [ index ])
-            | 3, "" | 8, _ -> adopt_anchor cursor
-            | _, text -> adopt_static cursor text);
+            | 3, "", Before_anchor | 8, _, Before_anchor -> ()
+            | 3, "", Before_next | 8, _, Before_next -> adopt_anchor cursor
+            | _, text, _ -> adopt_static cursor text);
             step (Dom_api.next_sibling current) (index + 1))
           node
       in

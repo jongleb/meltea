@@ -504,6 +504,16 @@ let lowercase frontend ~loc ~attributes tag arguments =
                     let [%p pvar ~loc named] =
                       Melhole.View.adopt_content __melhole_scope [%e evar ~loc (cursor indices)]
                         (Melhole.View.collected [%e evar ~loc (from named)])
+                        Melhole.View.Before_next
+                    in
+                    [%e body]]
+              | Child_before_anchor (indices, value) ->
+                  let named = hole_name (hole_of value) in
+                  [%expr
+                    let [%p pvar ~loc named] =
+                      Melhole.View.adopt_content __melhole_scope [%e evar ~loc (cursor indices)]
+                        (Melhole.View.collected [%e evar ~loc (from named)])
+                        Melhole.View.Before_anchor
                     in
                     [%e body]])
             (Markup.adoption element) finished

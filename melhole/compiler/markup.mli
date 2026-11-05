@@ -40,6 +40,7 @@ type 'value adoption =
   | Static of int list * string  (** Static text under the element at this path. *)
   | Anchor of int list  (** A node the template keeps between neighbours. *)
   | Slot_at of int list * slot * 'value
+  | Child_before_anchor of int list * 'value  (** A child slot whose nodes end at the anchor after it. *)
 
 val void : string -> [ `Void | `Container ]
 val adoption : 'value element -> 'value adoption list

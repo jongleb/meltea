@@ -9,3 +9,8 @@ type registration =
 val bind : Dom.element -> string -> string * registration
 
 val set : Dom.element -> string -> (Dom.event -> unit) -> unit
+
+(** The property under which a controlled element keeps what puts its value back after input. *)
+val controlled : string
+
+val replay : Dom.node -> unit

@@ -110,6 +110,7 @@ type 'value adoption =
   | Static of int list * string
   | Anchor of int list
   | Slot_at of int list * slot * 'value
+  | Child_before_anchor of int list * 'value
 
 let adoption root =
   let steps = ref [] in
@@ -117,6 +118,14 @@ let adoption root =
   let rec element path tree =
     emit (Enter (path, tree.tag));
     let settle pending = Option.iter (fun (slot, value) -> emit (Slot_at (path, slot, value))) pending in
+    let anchored pending =
+      match pending with
+      | Some (Child_slot, value) -> emit (Child_before_anchor (path, value))
+      | Some (Text_slot, value) ->
+          emit (Slot_at (path, Text_slot, value));
+          emit (Anchor path)
+      | None -> emit (Anchor path)
+    in
     let rec walk nodes index previous pending =
       match (nodes, pending, previous) with
       | [], _, _ -> settle pending
@@ -125,8 +134,7 @@ let adoption root =
           emit (Static (path, text));
           walk rest (index + 2) Static_text None
       | Text text :: rest, Some _, Static_text ->
-          settle pending;
-          emit (Anchor path);
+          anchored pending;
           emit (Static (path, text));
           walk rest (index + 2) Static_text None
       | Text text :: rest, _, (Nothing | Other) ->
@@ -139,8 +147,7 @@ let adoption root =
           walk rest (index + 1) Other None
       | Slot (slot, value) :: rest, None, _ -> walk rest index previous (Some (slot, value))
       | Slot (slot, value) :: rest, Some _, _ ->
-          settle pending;
-          emit (Anchor path);
+          anchored pending;
           walk rest (index + 1) Other (Some (slot, value))
     in
     (match

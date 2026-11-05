@@ -28,6 +28,7 @@ let go_to : string -> unit =
 let later : int -> unit Js.Promise.t =
   [%mel.raw {|function (delay) { return new Promise((resolve) => setTimeout(resolve, delay)); }|}]
 
+let install : string -> unit = [%mel.raw {|function (script) { (0, eval)(script); }|}]
 let ( let* ) promise next = Js.Promise.then_ next promise
 
 (** How an edit ends. *)
@@ -335,6 +336,77 @@ let () =
              finish served hydrated;
              finish fresh mounted;
              expect (created, first, agreed) |. to_equal (0, true, true);
+             Js.Promise.resolve ()))
+        [%mel.obj { numRuns = 60 }]);
+    test_async "what the user does on the server's page before the code arrives happens once the page hydrates" (fun () ->
+      check_async
+        (async_property (tapes ~shortest:10 ~longest:60) (fun values ->
+             let tape = tape values in
+             go_to "#/";
+             let model =
+               List.fold_left
+                 (fun model _ ->
+                   let message =
+                     match draw tape 4 with
+                     | 0 | 1 -> Todomvc.Type words.(draw tape (Array.length words))
+                     | 2 -> Todomvc.Add
+                     | _ -> Todomvc.Toggle (draw tape 4)
+                   in
+                   fst (Todomvc.update message model))
+                 (fst (Todomvc.init ~saved:"[]" ~hash:"#/"))
+                 (List.init (draw tape 10) Fun.id)
+             in
+             let served = attached () and fresh = attached () in
+             set_inner_html served (Program.render ~view:Todomvc.view model);
+             let rows = Array.length (elements (select_all served ".todo-list li")) in
+             let early =
+               (match (rows, draw tape 2) with
+               | 0, _ | _, 0 -> []
+               | _, _ -> [ Toggle_row (draw tape rows) ])
+               @ List.init (draw tape 5) (fun _ ->
+                     match (rows, draw tape 3) with
+                     | 0, _ | _, (0 | 1) -> Enter_new words.(draw tape (Array.length words))
+                     | _, _ -> Toggle_everything)
+             in
+             let mounted =
+               Program.element ~init:(model, Cmd.none) ~update:Todomvc.update ~view:Todomvc.view
+                 ~subscriptions:Todomvc.subscriptions fresh
+             in
+             install Melhole.Served.capture;
+             let rec run root remaining =
+               match remaining with
+               | [] -> Js.Promise.resolve ()
+               | action :: rest ->
+                   let* () = perform root action in
+                   run root rest
+             in
+             let* () = run served early in
+             let* () = run fresh early in
+             let hydrated =
+               Program.element ~start:Program.hydrate ~init:(model, Cmd.none) ~update:Todomvc.update ~view:Todomvc.view
+                 ~subscriptions:Todomvc.subscriptions served
+             in
+             let* () = later 0 in
+             let first = observe served = observe fresh in
+             let later_actions =
+               List.init (1 + draw tape 3) (fun _ ->
+                   match draw tape 3 with
+                   | 0 -> Enter_new words.(draw tape (Array.length words))
+                   | 1 -> Toggle_everything
+                   | _ -> Clear)
+             in
+             let rec compare remaining agreed =
+               match remaining with
+               | [] -> Js.Promise.resolve agreed
+               | action :: rest ->
+                   let* () = perform served action in
+                   let* () = perform fresh action in
+                   compare rest (agreed && observe served = observe fresh)
+             in
+             let* agreed = compare later_actions true in
+             finish served hydrated;
+             finish fresh mounted;
+             expect (first, agreed) |. to_equal (true, true);
              Js.Promise.resolve ()))
         [%mel.obj { numRuns = 60 }]);
     test "decode inverts encode" (fun () ->
