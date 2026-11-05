@@ -18,6 +18,8 @@ external find : Dom.element -> string -> Dom.element option = "querySelector"
 
 external remove : Dom.element -> unit = "remove" [@@mel.send]
 external active_element : Dom.document -> Dom.element = "activeElement" [@@mel.get]
+external set_inner_html : Dom.element -> string -> unit = "innerHTML" [@@mel.set]
+external document_prototype : prototype = "prototype" [@@mel.scope "Document"]
 
 let go_to : string -> unit =
   [%mel.raw
@@ -275,6 +277,65 @@ let () =
                  fields Todomvc.Ignore )
              |. to_equal (true, 0)))
         [%mel.obj { numRuns = 300 }]);
+    test_async "hydrating the server's page shows the same page, creates no element, and keeps working" (fun () ->
+      check_async
+        (async_property (tapes ~shortest:10 ~longest:60) (fun values ->
+             let tape = tape values in
+             go_to "#/";
+             let model =
+               List.fold_left
+                 (fun model _ ->
+                   let message =
+                     match draw tape 7 with
+                     | 0 | 1 -> Todomvc.Type words.(draw tape (Array.length words))
+                     | 2 -> Todomvc.Add
+                     | 3 -> Todomvc.Toggle (draw tape 4)
+                     | 4 -> Todomvc.Toggle_all
+                     | 5 -> Todomvc.Edit (draw tape 4)
+                     | _ -> Todomvc.Route [| Todomvc.All; Only Active; Only Completed |].(draw tape 3)
+                   in
+                   fst (Todomvc.update message model))
+                 (fst (Todomvc.init ~saved:"[]" ~hash:"#/"))
+                 (List.init (draw tape 14) Fun.id)
+             in
+             let served = attached () and fresh = attached () in
+             set_inner_html served (Program.render ~view:Todomvc.view model);
+             let creates = spy_on document_prototype "createElement" in
+             let clones = spy_on node_prototype "cloneNode" in
+             let hydrated =
+               Program.element ~start:Program.hydrate ~init:(model, Cmd.none) ~update:Todomvc.update ~view:Todomvc.view
+                 ~subscriptions:Todomvc.subscriptions served
+             in
+             let created = Array.length (calls (mock creates)) + Array.length (calls (mock clones)) in
+             restore creates;
+             restore clones;
+             let mounted =
+               Program.element ~init:(model, Cmd.none) ~update:Todomvc.update ~view:Todomvc.view
+                 ~subscriptions:Todomvc.subscriptions fresh
+             in
+             let first = (observe served, shapes (as_node served)) = (observe fresh, shapes (as_node fresh)) in
+             let actions =
+               List.init (1 + draw tape 5) (fun _ ->
+                   match draw tape 4 with
+                   | 0 -> Enter_new words.(draw tape (Array.length words))
+                   | 1 -> Toggle_everything
+                   | 2 -> Clear
+                   | _ -> Go hashes.(draw tape (Array.length hashes)))
+             in
+             let rec run remaining agreed =
+               match remaining with
+               | [] -> Js.Promise.resolve agreed
+               | action :: rest ->
+                   let* () = perform served action in
+                   let* () = perform fresh action in
+                   run rest (agreed && observe served = observe fresh)
+             in
+             let* agreed = run actions true in
+             finish served hydrated;
+             finish fresh mounted;
+             expect (created, first, agreed) |. to_equal (0, true, true);
+             Js.Promise.resolve ()))
+        [%mel.obj { numRuns = 60 }]);
     test "decode inverts encode" (fun () ->
       check
         (property (tapes ~shortest:0 ~longest:30) (fun values ->

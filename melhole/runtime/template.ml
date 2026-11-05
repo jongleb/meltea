@@ -10,6 +10,9 @@ type ('element, 'position) hole =
 
 type position = { parent : Dom.node; before : Dom.node Js.null }
 
+let opening = "["
+let closing = "]"
+
 (** The markup until the first clone parses it, then the parsed root. *)
 type source = Markup of { markup : string; root : Dom.node -> Dom.node } | Parsed of Dom.element
 
@@ -18,24 +21,44 @@ type t = {
   paths : (int list, int list * int) hole array;
 }
 
-external first : Dom.node -> Dom.node = "firstChild" [@@mel.get]
-external next : Dom.node -> Dom.node = "nextSibling" [@@mel.get]
+external first_child : Dom.node -> Dom.node = "firstChild" [@@mel.get]
 
-external first_or_end : Dom.node -> Dom.node Js.null = "firstChild" [@@mel.get]
-external next_or_end : Dom.node -> Dom.node Js.null = "nextSibling" [@@mel.get]
+let marker node label =
+  match Js.Null.toOption node with
+  | Some found when Dom_api.node_type found = 8 && String.equal (Dom_api.data found) label -> Some found
+  | Some _ | None -> None
+
+let rec past node =
+  match marker node opening with
+  | None -> node
+  | Some start ->
+      let rec matching node depth =
+        let sibling = Dom_api.following_sibling node in
+        match (marker sibling opening, marker sibling closing) with
+        | Some found, _ -> matching found (depth + 1)
+        | None, Some found when depth = 0 -> Dom_api.following_sibling found
+        | None, Some found -> matching found (depth - 1)
+        | None, None -> matching (Js.Null.getUnsafe sibling) depth
+      in
+      past (matching start 0)
+
+let first_or_end node = past (Dom_api.first_child_or_end node)
+let next_or_end node = past (Dom_api.following_sibling node)
+let first node = Js.Null.getUnsafe (first_or_end node)
+let next node = Js.Null.getUnsafe (next_or_end node)
 
 external element : Dom.node -> Dom.element = "%identity"
 
-let html markup = { source = Markup { markup; root = first }; paths = [||] }
+let html markup = { source = Markup { markup; root = first_child }; paths = [||] }
 
 let svg markup =
-  { source = Markup { markup = "<svg>" ^ markup ^ "</svg>"; root = (fun content -> first (first content)) }; paths = [||] }
+  { source = Markup { markup = "<svg>" ^ markup ^ "</svg>"; root = (fun content -> first_child (first_child content)) }; paths = [||] }
 
-let make ~html ~holes = { source = Markup { markup = html; root = first }; paths = holes }
+let make ~html ~holes = { source = Markup { markup = html; root = first_child }; paths = holes }
 
-let clone t =
+let parsed t =
   match t.source with
-  | Parsed root -> Dom_api.clone_node root
+  | Parsed root -> root
   | Markup { markup; root } ->
       let template = Dom_api.create_element Dom_api.document "template" in
       Dom_api.set_inner_html template markup;
@@ -54,28 +77,33 @@ let clone t =
       in
       Option.iter unmark (Dom_api.first_child parsed);
       t.source <- Parsed (element parsed);
-      Dom_api.clone_node (element parsed)
+      element parsed
+
+let clone t = Dom_api.clone_node (parsed t)
+
+let tag t = Dom_api.node_name (Dom_api.to_node (parsed t))
 
 let locate t root =
   let fail () = Js.Exn.raiseError "melhole: a template path does not resolve" in
   let rec slot candidate index =
-    match (candidate, index) with
+    match (Dom_api.same candidate Js.null, index) with
     | _, 0 -> candidate
-    | Some node, _ -> slot (Dom_api.next_sibling node) (index - 1)
-    | None, _ -> fail ()
+    | false, _ -> slot (next_or_end (Js.Null.getUnsafe candidate)) (index - 1)
+    | true, _ -> fail ()
   in
   let rec descend node path =
     match path with
     | [] -> node
     | index :: rest -> (
-        match slot (Dom_api.first_child node) index with
-        | Some child -> descend child rest
-        | None -> fail ())
+        let child = slot (first_or_end node) index in
+        match Dom_api.same child Js.null with
+        | false -> descend (Js.Null.getUnsafe child) rest
+        | true -> fail ())
   in
   let at path = element (descend root path) in
   let position (path, index) =
     let parent = descend root path in
-    { parent; before = Js.Null.fromOption (slot (Dom_api.first_child parent) index) }
+    { parent; before = slot (first_or_end parent) index }
   in
   Array.map
     (fun hole ->

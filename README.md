@@ -97,7 +97,7 @@ after every step.
 
 | module | what it gives |
 |---|---|
-| `Program` | `sandbox ~init ~update ~view root`, `element ~init ~update ~view ~subscriptions root`, `dispatch`, `flush`, `stop` |
+| `Program` | `sandbox ~init ~update ~view root`, `element ~init ~update ~view ~subscriptions root`, `dispatch`, `flush`, `stop`; `render ~view model` for the server and `~start:Program.hydrate` to take its HTML over |
 | `Html` | `text`, `int`, `float`, `none`, `list`, `keyed`, `map`, `memo` (Elm's `lazy`) |
 | `Cmd` | `none`, `batch`, `map`, `message`, `perform` (a promise), `focus` (an element by id, after the next draw), `port` (a value out to JavaScript) |
 | `Sub` | `none`, `batch`, `map`, `every`, `hash` (the URL fragment) |

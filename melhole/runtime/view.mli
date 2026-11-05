@@ -63,6 +63,24 @@ type live = private {
 
 val nothing : live
 
+(** Whether a content hole still has the server's markers around its place. *)
+type range = Settled | Closing_at of Dom.node
+
+(** How children reach the DOM: built in the browser, written by a server, or adopted from its HTML. *)
+type medium = {
+  text : (Template.position -> string option -> Dom.text[@u]);  (** [None] keeps a text already there. *)
+  root : (Template.position -> Template.t -> Dom.element[@u]);
+  placed : (Template.position -> Dom.element -> unit[@u]);
+  opened : (Template.position -> range[@u]);  (** Where a content hole's children go. *)
+  closed : (Dom.node -> Dom.node -> range[@u]);  (** After a hole's first children, before its closing marker. *)
+  built : (int -> Template.position -> (int -> Template.position -> live[@u]) -> live array[@u]);
+  aside : ((unit -> live[@u]) -> live[@u]);  (** Children that live elsewhere, like a portal's. *)
+}
+
+val browser : medium
+val medium : medium ref
+val backwards : int -> Template.position -> (int -> Template.position -> live[@u]) -> live array
+
 val live :
   hosted ->
   each:((Dom.node -> unit[@u]) -> unit[@u]) ->

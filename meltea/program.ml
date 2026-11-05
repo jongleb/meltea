@@ -15,6 +15,12 @@ external same : 'a -> 'b -> bool = "%eq"
 (** Whether a redraw is waiting for the next microtask. *)
 type schedule = Idle | Queued
 
+(** How a program takes over its root: empty, or holding the server's HTML of the first model. *)
+type start = { take : View.child -> Dom.element -> View.mounted }
+
+let mount = { take = (fun child root -> View.mount child ~parent:root ~before:None) }
+let hydrate = { take = (fun child root -> Served.hydrate child ~parent:root) }
+
 (** What a kind of program does around the shared loop: apply a message, follow a drawn model, stop. *)
 type ('model, 'msg) course = {
   step : 'msg -> 'model -> ('msg -> unit) -> 'model;
@@ -22,11 +28,11 @@ type ('model, 'msg) course = {
   halted : ('msg -> unit) -> unit;
 }
 
-let start course ~tracking ~view initial root =
+let launch course ~tracking ~mode ~view initial root =
   let model = ref initial and schedule = ref Idle and sink = ref ignore and pending = ref 0 in
   let dispatch message = !sink message in
   let mounted =
-    View.mount (Html.render (view initial) dispatch) ~parent:root ~before:None
+    mode.take (Html.render (view initial) dispatch) root
   in
   let draw () =
     match !schedule with
@@ -65,11 +71,11 @@ let track ~update ~changes ~view ~reads =
       { changes = found.fields; reads = read.fields }
   | (Changes _ | Unanalysed), (Reads _ | Unread) -> everything
 
-let element ?(tracking = everything) ~init ~update ~view ~subscriptions root =
+let element ?(tracking = everything) ?(start = mount) ~init ~update ~view ~subscriptions root =
   let initial, commands = init in
   let active = Sub.activate () in
   let program =
-    start
+    launch
       {
         step =
           (fun message model dispatch ->
@@ -79,17 +85,18 @@ let element ?(tracking = everything) ~init ~update ~view ~subscriptions root =
         drawn = (fun model dispatch -> Sub.apply active (subscriptions model) dispatch);
         halted = (fun dispatch -> Sub.apply active Sub.none dispatch);
       }
-      ~tracking ~view initial root
+      ~tracking ~mode:start ~view initial root
   in
   Sub.apply active (subscriptions initial) program.send;
   Cmd.run commands program.send;
   program
 
-let sandbox ?(tracking = everything) ~init ~update ~view root =
-  start
+let sandbox ?(tracking = everything) ?(start = mount) ~init ~update ~view root =
+  launch
     { step = (fun message model _ -> update message model); drawn = (fun _ _ -> ()); halted = ignore }
-    ~tracking ~view init root
+    ~tracking ~mode:start ~view init root
 
+let render ~view model = Served.render (Html.render (view model) ignore)
 let dispatch program message = program.send message
 let flush program = program.draw ()
 let stop program = program.halt ()

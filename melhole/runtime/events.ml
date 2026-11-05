@@ -5,7 +5,7 @@ let delegated_types = ref []
 
 let bind element event =
   let key =
-    match List.assoc_opt event !keys with
+    match List.find_map (fun (known, key) -> if String.equal known event then Some key else None) !keys with
     | Some key -> key
     | None ->
         let key = "$$melhole:" ^ event in

@@ -94,6 +94,37 @@ let nothing =
 let insert (position : Template.position) node =
   Dom_api.insert_before position.parent node position.before
 
+(** Whether a content hole still has the server's markers around its place. *)
+type range = Settled | Closing_at of Dom.node
+
+(** How children reach the DOM: built in the browser, written by a server, or adopted from its HTML. *)
+type medium = {
+  text : (Template.position -> string option -> Dom.text[@u]);  (** [None] keeps a text already there. *)
+  root : (Template.position -> Template.t -> Dom.element[@u]);
+  placed : (Template.position -> Dom.element -> unit[@u]);
+  opened : (Template.position -> range[@u]);  (** Where a content hole's children go. *)
+  closed : (Dom.node -> Dom.node -> range[@u]);  (** After a hole's first children, before its closing marker. *)
+  built : (int -> Template.position -> (int -> Template.position -> live[@u]) -> live array[@u]);
+  aside : ((unit -> live[@u]) -> live[@u]);  (** Children that live elsewhere, like a portal's. *)
+}
+
+let browser =
+  {
+    text =
+      (fun [@u] position value ->
+        let node = Dom_api.create_text_node Dom_api.document (Option.value ~default:"" value) in
+        insert position node;
+        node);
+    root = (fun [@u] _ markup -> Template.clone markup);
+    placed = (fun [@u] position root -> insert position root);
+    opened = (fun [@u] _ -> Settled);
+    closed = (fun [@u] _ _ -> Settled);
+    built = (fun [@u] count position make -> Array.init count (fun index -> make index position [@u]));
+    aside = (fun [@u] build -> build () [@u]);
+  }
+
+let medium = ref browser
+
 let remove (position : Template.position) live =
   live.each (fun [@u] node -> Dom_api.remove_child position.parent node) [@u];
   live.release () [@u]
@@ -166,8 +197,7 @@ let text value =
     shape = Single;
     build =
       (fun [@u] position ->
-        let node = Dom_api.create_text_node Dom_api.document value in
-        insert position node;
+        let node = !medium.text position (Some value) [@u] in
         {
           state = Text_state { node; value };
           each = (fun [@u] visit -> visit (Dom_api.to_node node) [@u]);
@@ -197,7 +227,8 @@ let many children =
     shape = Many children;
     build =
       (fun [@u] position ->
-        let items = Array.of_list (List.map (fun child -> child.build position [@u]) children) in
+        let children = Array.of_list children in
+        let items = !medium.built (Array.length children) position (fun [@u] index at -> (Array.unsafe_get children index).build at [@u]) [@u] in
         group (List_state items) items);
     patch =
       (fun [@u] position live ->
@@ -224,7 +255,7 @@ let keyed entries =
     shape = Entries entries;
     build =
       (fun [@u] position ->
-        let items = Array.map (fun child -> child.build position [@u]) children in
+        let items = !medium.built (Array.length children) position (fun [@u] index at -> (Array.unsafe_get children index).build at [@u]) [@u] in
         group (Keyed_state (keys, items)) items);
     patch =
       (fun [@u] position live ->
@@ -269,12 +300,12 @@ let each items render project outer =
       (fun [@u] position ->
         let keys = Array.make count "" in
         let lives =
-          Array.mapi
-            (fun index item ->
-              let child, key = rendered index item in
+          !medium.built count position
+            (fun [@u] index at ->
+              let child, key = rendered index (Array.unsafe_get items index) in
               Array.unsafe_set keys index key;
-              child.build position [@u])
-            items
+              child.build at [@u])
+            [@u]
         in
         let projections = Array.map (fun item -> project item [@u]) items in
         group (Each_state { items; keys; outer; projections; lives }) lives);
@@ -457,7 +488,8 @@ let portal container child =
   in
   {
     shape = Single;
-    build = (fun [@u] _ -> held (child.build inside [@u]));
+    build =
+      (fun [@u] _ -> held (!medium.aside (fun [@u] () -> child.build inside [@u]) [@u]));
     patch =
       (fun [@u] _ live ->
         match live.state with
@@ -467,7 +499,7 @@ let portal container child =
   }
 
 let place position root scope state =
-  insert position root;
+  !medium.placed position root [@u];
   scope.placement <- Placed;
   List.iter (fun reference -> reference () [@u]) (List.rev scope.references);
   {
@@ -486,7 +518,7 @@ let compiled template count refresh =
     shape = Single;
     build =
       (fun [@u] position ->
-        let root = Template.clone template.markup in
+        let root = !medium.root position template.markup [@u] in
         let scope = fresh count in
         let holes = template.holes scope (Dom_api.to_node root) [@u] in
         refresh scope holes [@u];
@@ -513,7 +545,7 @@ let compiled template count refresh =
 let static markup =
   {
     shape = Single;
-    build = (fun [@u] position -> place position (Template.clone markup) (fresh 0) (Static_state markup));
+    build = (fun [@u] position -> place position (!medium.root position markup [@u]) (fresh 0) (Static_state markup));
     patch =
       (fun [@u] _ live ->
         match live.state with
@@ -536,13 +568,17 @@ module Hole = struct
   type classes = { element : Dom.element; mutable value : string list }
   type handler = { element : Dom.element; key : string }
   type reference = { scope : scope; element : Dom.element; mutable callback : Dom.element -> unit }
-  type content = { position : Template.position; mutable source : child; mutable live : live }
+  type content = {
+    position : Template.position;
+    mutable source : child;
+    mutable live : live;
+    mutable range : range;
+  }
 end
 
 let text_hole position =
-  let node = Dom_api.create_text_node Dom_api.document "" in
-  insert position node;
-  ({ node; value = "" } : Hole.text)
+  let node = !medium.text position None [@u] in
+  ({ node; value = Dom_api.data (Dom_api.to_node node) } : Hole.text)
 
 let set_text (hole : Hole.text) value =
   if not (Dom_api.same hole.value value) then (
@@ -623,15 +659,23 @@ let set_reference (hole : Hole.reference) callback =
     hole.callback <- callback;
     match hole.scope.placement with Placed -> callback hole.element | Detached -> ())
 
-let content_hole scope position =
-  let hole : Hole.content = { position; source = empty; live = nothing } in
+let content_hole scope (position : Template.position) =
+  let range = !medium.opened position [@u] in
+  let hole : Hole.content = { position; source = empty; live = nothing; range } in
   scope.cleanups <- (fun [@u] () -> hole.live.release () [@u]) :: scope.cleanups;
   hole
 
 let set_content (hole : Hole.content) child =
-  if not (Dom_api.same hole.source child) then (
-    hole.live <- update hole.position hole.live child;
-    hole.source <- child)
+  match (hole.range, Dom_api.same hole.source child) with
+  | Settled, true -> ()
+  | Settled, false ->
+      hole.live <- update hole.position hole.live child;
+      hole.source <- child
+  | Closing_at closing, _ ->
+      hole.live <- child.build { hole.position with before = Js.Null.return closing } [@u];
+      hole.source <- child;
+      hole.range <- !medium.closed hole.position.parent closing [@u]
+
 (** A hole of a hand-written template. *)
 type site =
   | Text_hole of Hole.text
@@ -674,7 +718,7 @@ let tpl_instance markup values =
     shape = Single;
     build =
       (fun [@u] position ->
-        let root = Template.clone markup in
+        let root = !medium.root position markup [@u] in
         let scope = fresh 0 in
         let sites =
           Array.map

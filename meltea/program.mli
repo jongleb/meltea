@@ -2,6 +2,12 @@
 
 type 'msg t
 
+(** How a program takes over its root: empty, or holding the server's HTML of the first model. *)
+type start
+
+val mount : start
+val hydrate : start
+
 (** The model fields each message may change, as a bit mask, with the [update] they were found in. *)
 type 'msg changes =
   | Changes : { analysed : 'update; fields : 'msg -> int } -> 'msg changes
@@ -22,6 +28,7 @@ val track : update:'update -> changes:'msg changes -> view:'view -> reads:reads 
 
 val sandbox :
   ?tracking:'msg tracking ->
+  ?start:start ->
   init:'model ->
   update:('msg -> 'model -> 'model) ->
   view:('model -> 'msg Html.t) ->
@@ -30,6 +37,7 @@ val sandbox :
 
 val element :
   ?tracking:'msg tracking ->
+  ?start:start ->
   init:'model * 'msg Cmd.t ->
   update:('msg -> 'model -> 'model * 'msg Cmd.t) ->
   view:('model -> 'msg Html.t) ->
@@ -37,6 +45,7 @@ val element :
   Dom.element ->
   'msg t
 
+val render : view:('model -> 'msg Html.t) -> 'model -> string
 val dispatch : 'msg t -> 'msg -> unit
 val flush : 'msg t -> unit
 val stop : 'msg t -> unit

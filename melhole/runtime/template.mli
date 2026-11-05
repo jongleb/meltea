@@ -14,6 +14,10 @@ type ('element, 'position) hole =
 (** Where inserted content goes: before [before], or appended to [parent]. *)
 type position = { parent : Dom.node; before : Dom.node Js.null }
 
+val opening : string
+val closing : string
+val marker : Dom.node Js.null -> string -> Dom.node option
+
 type t
 
 val html : string -> t
@@ -26,14 +30,14 @@ val make : html:string -> holes:(int list, int list * int) hole array -> t
 (** A hand-written template whose holes are given by paths. *)
 
 val clone : t -> Dom.element
+val tag : t -> string
 
 val locate : t -> Dom.node -> (Dom.element, position) hole array
 (** The holes of a hand-written template in a clone, found by their paths. *)
 
-external first : Dom.node -> Dom.node = "firstChild" [@@mel.get]
-external next : Dom.node -> Dom.node = "nextSibling" [@@mel.get]
-
-external first_or_end : Dom.node -> Dom.node Js.null = "firstChild" [@@mel.get]
-external next_or_end : Dom.node -> Dom.node Js.null = "nextSibling" [@@mel.get]
+val first : Dom.node -> Dom.node
+val next : Dom.node -> Dom.node
+val first_or_end : Dom.node -> Dom.node Js.null
+val next_or_end : Dom.node -> Dom.node Js.null
 
 external element : Dom.node -> Dom.element = "%identity"
