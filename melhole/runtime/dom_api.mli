@@ -108,6 +108,9 @@ external target : Dom.event -> Dom.node option = "target"
 
 external cancel_bubble : Dom.event -> bool = "cancelBubble" [@@mel.get]
 
+external active_element : Dom.document -> Dom.element Js.null = "activeElement"
+[@@mel.get]
+
 external point_current_target :
   Dom.event ->
   (_[@mel.as "currentTarget"]) ->

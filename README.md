@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/meltea-dark.svg">
+  <img src="assets/meltea.svg" alt="Meltea: a tea glass with a hole in orbit around it" width="120">
+</picture>
+
 # Meltea
 
 **The Elm architecture for OCaml and Melange: pure functions everywhere, views in mlx,

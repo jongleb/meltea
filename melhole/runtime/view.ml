@@ -563,7 +563,10 @@ let check scope index value =
 module Hole = struct
   type text = { node : Dom.text; mutable value : string }
   type attr = { element : Dom.element; name : string; mutable value : string option }
-  type prop = { element : Dom.element; name : string; mutable value : input }
+  (** What else a property write updates: React keeps an input's [value] attribute in step. *)
+  type echo = Alone | Default_value
+
+  type prop = { element : Dom.element; name : string; mutable value : input; echo : echo }
   type style = { element : Dom.element; mutable value : (string * string) list }
   type classes = { element : Dom.element; mutable value : string list }
   type handler = { element : Dom.element; key : string }
@@ -594,16 +597,32 @@ let set_attr (hole : Hole.attr) value =
     | None -> Dom_api.remove_attribute hole.element hole.name);
     hole.value <- value)
 
-let prop_hole element name : Hole.prop = { element; name; value = Input (ref ()) }
+let prop_hole element name : Hole.prop = { element; name; value = Input (ref ()); echo = Alone }
 
 let set_prop (hole : Hole.prop) value =
   let (Input old) = hole.value in
   if not (Dom_api.same old value) then (
     Dom_api.set_property hole.element hole.name value;
+    (match hole.echo with
+    | Alone -> ()
+    | Default_value -> (
+        match (Dom_api.property hole.element "type" : string) with
+        | "number" when Dom_api.same (Dom_api.active_element Dom_api.document) (Js.Null.return hole.element) -> ()
+        | _ -> Dom_api.set_property hole.element "defaultValue" value));
     hole.value <- Input value)
 
 let controlled_hole element name =
-  let hole = prop_hole element name in
+  let hole : Hole.prop =
+    {
+      element;
+      name;
+      value = Input (ref ());
+      echo =
+        (match (name, Dom_api.node_name (Dom_api.to_node element)) with
+        | "value", ("INPUT" | "TEXTAREA") -> Default_value
+        | _ -> Alone);
+    }
+  in
   let restore _ =
     Dom_api.queue_microtask (fun () ->
         Dom_api.queue_microtask (fun () ->
