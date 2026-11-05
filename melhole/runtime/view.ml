@@ -25,6 +25,8 @@ type state =
   | List_state of live array
   | Keyed_state of string array * live array
   | Memo_state of input array * live
+  | Pure_state of { identity : input; inputs : input array; inner : live }
+      (** A function of its inputs; another identity is another kind of child. *)
   | Portal_state of Dom.element * live
   | Compiled_state of { identity : input; scope : scope; lend : (unit -> unit[@u]) }
   | Static_state of Template.t
@@ -371,6 +373,23 @@ let memo inputs render =
             match compare_inputs old inputs with
             | Unchanged -> Some live
             | Changed -> Some (skipping (update position inner (render ()))))
+        | _ -> None);
+  }
+
+let pure identity inputs render =
+  let named inner = { inner with state = Pure_state { identity = Input identity; inputs; inner } } in
+  {
+    shape = Single;
+    build = (fun [@u] position -> named ((render ()).build position [@u]));
+    patch =
+      (fun [@u] position live ->
+        match live.state with
+        | Pure_state old -> (
+            let (Input known) = old.identity in
+            match (Dom_api.same known identity, compare_inputs old.inputs inputs) with
+            | true, Unchanged -> Some live
+            | true, Changed -> Some (named (update position old.inner (render ())))
+            | false, _ -> None)
         | _ -> None);
   }
 

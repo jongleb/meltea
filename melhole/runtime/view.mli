@@ -30,6 +30,7 @@ val lazy1 : ('a -> child) -> 'a -> child
 val lazy2 : ('a -> 'b -> child) -> 'a -> 'b -> child
 val portal : Dom.element -> child -> child
 val memo : input array -> (unit -> child) -> child
+val pure : 'identity -> input array -> (unit -> child) -> child
 val items : child -> child list
 
 (** A mounted compiled template: the values its refresh last read and what it holds. *)
