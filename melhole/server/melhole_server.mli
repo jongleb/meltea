@@ -37,3 +37,7 @@ val float : float -> string
 (** A script for the page's [<head>]: it records the events of the HTML before the code arrives,
     and the first hydration delivers those inside its root to their handlers, in order. *)
 val capture : string
+
+(** A [<script type="application/json">] holding JSON text, for the browser to read back with
+    [Served.data]: every [<] is written as [\u003c], so no text in the data can end the script. *)
+val data : id:string -> string -> string

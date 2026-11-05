@@ -90,3 +90,8 @@ let hydrate child ~parent =
       View.medium := View.browser;
       Dom_api.set_text_content (Dom_api.to_node parent) "";
       View.mount child ~parent ~before:None
+
+external element_by_id : Dom.document -> string -> Dom.element Js.null = "getElementById" [@@mel.send]
+external script_text : Dom.element -> string = "textContent" [@@mel.get]
+
+let data ~id = Option.map script_text (Js.Null.toOption (element_by_id Dom_api.document id))

@@ -21,6 +21,19 @@ external double : unit -> float arbitrary = "double" [@@mel.module "fast-check"]
 let of_bits : string -> float =
   [%mel.raw {|function (bits) { return new Float64Array(new BigInt64Array([BigInt(bits)]).buffer)[0]; }|}]
 
+external stringify : string -> string = "stringify" [@@mel.scope "JSON"]
+external parse_string : string -> string = "parse" [@@mel.scope "JSON"]
+external full_string : unit -> string arbitrary = "fullUnicodeString" [@@mel.module "fast-check"]
+
+let parsed_page : string -> Dom.document =
+  [%mel.raw {|function (html) { return new DOMParser().parseFromString(html, "text/html"); }|}]
+
+external by_id : Dom.document -> string -> Dom.element Js.null = "getElementById" [@@mel.send]
+external query_all : Dom.document -> string -> Dom.nodeList = "querySelectorAll" [@@mel.send]
+external adopt_node : Dom.document -> Dom.element -> Dom.element = "adoptNode" [@@mel.send]
+
+let fragments = [| "</script>"; "</SCRIPT >"; "<!--"; "-->"; "<script>"; "\u{2028}"; "\\"; "\""; "<"; "&lt;"; "]]>" |]
+
 let corpus () = parse_json (read_file "_build/default/test/served/native/corpus.json" "utf8")
 
 (** A node as the parser builds it: comments and texts kept, attributes by name, style as the browser reads it. *)
@@ -66,6 +79,32 @@ let () =
           expect
             (Array.to_list (Array.map (fun entry -> js_string (of_bits entry##bits)) floats))
           |. to_equal (Array.to_list (Array.map (fun entry -> entry##text) floats)));
+      test "data written into the page reads back as it was, and no text in it ends the script" (fun () ->
+          check
+            (property
+               (array_of (full_string ()) [%mel.obj { minLength = 0; maxLength = 6 }])
+               (fun pieces ->
+                 let text =
+                   String.concat ""
+                     (Array.to_list
+                        (Array.mapi
+                           (fun index piece -> piece ^ fragments.((index + String.length piece) mod Array.length fragments))
+                           pieces))
+                 in
+                 let page =
+                   parsed_page
+                     ("<!doctype html><html><head>" ^ Melhole_server.data ~id:"model" (stringify text)
+                    ^ "</head><body><p id=\"after\">ok</p></body></html>")
+                 in
+                 let script = Js.Null.getExn (by_id page "model") in
+                 let after = Array.length (nodes (query_all page "p")) in
+                 let scripts = Array.length (nodes (query_all page "script")) in
+                 let live = adopt_node document script in
+                 append_child (body document) live;
+                 let read = Option.map parse_string (Melhole.Served.data ~id:"model") in
+                 remove live;
+                 expect (read, after, scripts) |. to_equal (Some text, 1, 1)))
+            [%mel.obj { numRuns = 500 }]);
       test "native and Melange servers write the same HTML for the same model" (fun () ->
           let pages = (corpus ())##pages in
           expect (Array.to_list (Array.map (fun entry -> server_page entry##tape) pages))

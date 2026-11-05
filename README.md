@@ -166,11 +166,14 @@ One module with the model, `update` and `view` builds for both sides
 ```
 
 ```ocaml
-(* server *)
-"<script>" ^ Melhole_server.capture ^ "</script>" ^ "<div id=\"root\">" ^ Program.render ~view:Page.view 41 ^ "</div>"
+(* server: the capture script, the model as data, the page *)
+"<script>" ^ Melhole_server.capture ^ "</script>" ^ Melhole_server.data ~id:"model" (encode model)
+^ "<div id=\"root\">" ^ Program.render ~view:Page.view model ^ "</div>"
 
-(* browser *)
-Program.sandbox ~start:Program.hydrate ~init:41 ~update:Page.update ~view:Page.view root
+(* browser: start from the server's model, no init and no commands run twice *)
+Option.iter
+  (fun text -> ignore (Program.sandbox ~start:Program.hydrate ~init:(decode text) ~update:Page.update ~view:Page.view root))
+  (Melhole.Served.data ~id:"model")
 ```
 
 ## API

@@ -152,3 +152,15 @@ let float value =
 
 let capture =
   {|(function(g,d){var q=[],t=["click","dblclick","input","change","keydown","keyup","submit"],f=function(e){var x=e.target;q.push([e,x.value,x.checked])};t.forEach(function(n){d.addEventListener(n,f,true)});g.__melhole_early=function(){t.forEach(function(n){d.removeEventListener(n,f,true)});delete g.__melhole_early;return q}})(globalThis,document)|}
+
+let data ~id json =
+  let buffer = Buffer.create (String.length json + 64) in
+  Buffer.add_string buffer "<script type=\"application/json\" id=\"";
+  Buffer.add_string buffer (escape id);
+  Buffer.add_string buffer "\">";
+  String.iter
+    (fun character ->
+      match character with '<' -> Buffer.add_string buffer "\\u003c" | other -> Buffer.add_char buffer other)
+    json;
+  Buffer.add_string buffer "</script>";
+  Buffer.contents buffer

@@ -4,3 +4,6 @@
 val following : View.medium
 val render : View.child -> string
 val hydrate : View.child -> parent:'a Dom.node_like -> View.mounted
+
+(** The JSON text the server wrote with [Melhole_server.data ~id], if the page has it. *)
+val data : id:string -> string option
