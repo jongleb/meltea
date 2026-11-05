@@ -49,11 +49,24 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   immutable values make this exact: an unchanged reference is an unchanged value.
 - **Fields.** The compiler reads `update` and `view`: which model fields each message can change,
   which fields the view reads. A message that changes nothing the view reads does not call it.
+- **Lists.** `Html.list (List.map row items)` is a keyed loop with selectors: a row is rendered
+  again only when its item is another object or a piece of it that reads outer values changed.
 - **Events.** `onClick=Increment` sends a message. `onInput` and `onKeyDown` take a function of
   the value or the key, `onCheck` of the checked state. Handlers are delegated to `document`.
 - **Controlled inputs.** `value` and `checked` always show the model: after typing, the field
   gets the model's value back if the update did not take the input.
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
+- **Server.** `Program.render` writes HTML, `~start:Program.hydrate` takes it over in the browser.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/fields-dark.svg">
+  <img src="assets/fields.svg" alt="Fields an update changes, in Meltea's TodoMVC: meltea-ppx reads update and finds what each message can change: Type changes field, Route changes filter, Add changes todos, field and next, Ignore changes nothing, and Edit, which it does not recognise, changes all fields. It reads view the same way: todos, field, editing and filter, never next. After Ignore nothing the view reads changed, so the view is not called; after Type the view runs and one === per local picks the holes to write" width="100%">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/selectors-dark.svg">
+  <img src="assets/selectors.svg" alt="Compiled selectors, after Vue Vapor: a row of Html.list (List.map …) reads its item and the outer value selected through one leaf without JSX; the compiler emits a projection that evaluates only that leaf for each row. When selected goes from Some 2 to Some 5 and the six items are the same objects, only rows 2 and 5 have a changed projection, so only they render, in place; the other four are kept without calling the row function" width="100%">
+</picture>
 
 The counter's view compiles to this JavaScript (names shortened):
 
@@ -65,10 +78,10 @@ const template = View.template(Template.html("<div class=\"counter\"><button>-</
   });
 
 const view = (count, dispatch) =>
-  View.compiled(template, 1, (scope, holes) => {
-    const changed = check(scope, 0, count);              // one === against the last count
-    set_handler(holes[0], () => dispatch(Decrement));    // handlers are swapped, not compared
-    if (changed === Changed) set_text(holes[1], String(count));
+  View.compiled(template, 2, (scope, holes) => {
+    const sent = check(scope, 0, dispatch), counted = check(scope, 1, count); // one === each
+    if (sent === Changed) set_handler(holes[0], () => dispatch(Decrement));  // first draw only
+    if (counted === Changed) set_text(holes[1], String(count));
     …
   });
 ```
