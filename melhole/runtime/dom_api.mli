@@ -128,6 +128,18 @@ external request_animation_frame : (float -> unit) -> unit
   = "requestAnimationFrame"
 
 external set_timeout : (unit -> unit) -> int -> unit = "setTimeout"
+
+external computed_style :
+  Dom.element ->
+  < transitionDuration : string
+  ; transitionDelay : string
+  ; animationDuration : string
+  ; animationDelay : string >
+  Js.t = "getComputedStyle"
+
+external bounding_rect : Dom.element -> < left : float ; top : float > Js.t
+  = "getBoundingClientRect"
+[@@mel.send]
 external compare_document_position : Dom.node -> Dom.node -> int = "compareDocumentPosition"
 [@@mel.send]
 

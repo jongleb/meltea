@@ -69,7 +69,20 @@ let mapper =
             | _ -> None);
         each =
           (fun loc item ->
+            let rec looped item =
             match item.pexp_desc with
+            | Pexp_apply
+                ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", ("transition" | "transition_group" as kind)); _ }; _ },
+                  arguments ) -> (
+                match List.rev arguments with
+                | (Nolabel, inner) :: settings ->
+                    Option.map
+                      (fun loop ->
+                        Ast_builder.Default.pexp_apply ~loc
+                          (Ast_builder.Default.evar ~loc (match kind with "transition" -> "Melhole.Transition.make" | _ -> "Melhole.Transition.group"))
+                          (List.rev_map (fun (label, value) -> (label, self#expression value)) settings @ [ (Nolabel, loop) ]))
+                      (looped inner)
+                | _ -> None)
             | Pexp_apply
                 ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "list"); _ }; _ },
                   [
@@ -93,7 +106,9 @@ let mapper =
                   ~render:(fun view -> [%expr Html.render [%e view] __melhole_dispatch])
                   row
                   [%expr Array.of_list [%e self#expression items]]
-            | _ -> None);
+            | _ -> None
+            in
+            looped item);
       }
 
     val mutable tracked : (string * string) list = []

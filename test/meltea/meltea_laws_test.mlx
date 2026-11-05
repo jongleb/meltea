@@ -167,6 +167,21 @@ let mark_view { rows; chosen; suffix } =
   in
   <ul>(Html.list (List.map row rows))</ul>
 
+let glide_view { rows; chosen; suffix } =
+  let row item =
+    <li
+      key=(string_of_int item.id)
+      className=(match chosen with Some id when id = item.id -> "on" | Some _ | None -> "")>
+      (Html.text (item.title ^ suffix))
+    </li>
+  in
+  <ul>(Html.transition_group ~name:"row" ~duration:50 (Html.list (List.map row rows)))</ul>
+
+external use_fake_timers : < toFake : string array > Js.t -> unit = "useFakeTimers" [@@mel.scope "vi"]
+external use_real_timers : unit -> unit = "useRealTimers" [@@mel.scope "vi"]
+external advance : int -> unit = "advanceTimersByTime" [@@mel.scope "vi"]
+external class_name : Dom.node -> string = "className" [@@mel.get]
+
 let mark_init =
   { rows = List.init 6 (fun id -> { id; title = "t" ^ string_of_int id; finished = false }); chosen = None; suffix = "" }
 
@@ -279,6 +294,50 @@ let () =
              Program.stop program;
              Program.stop expected))
         [%mel.obj { numRuns = 300 }]);
+    test "a list in Html.transition_group keeps a dropped row while it leaves, then shows the model" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:60) (fun values ->
+             use_fake_timers [%mel.obj { toFake = [| "setTimeout"; "requestAnimationFrame"; "Date" |] }];
+             let tape = tape values in
+             let root = create_element document "div" and fresh = create_element document "div" in
+             let program = Program.sandbox ~init:mark_init ~update:mark_update ~view:glide_view root in
+             let model = ref mark_init in
+             let leaving = ref 0 and dropped = ref 0 in
+             List.iter
+               (fun _ ->
+                 let ids = List.map (fun item -> item.id) !model.rows in
+                 let pick () = List.nth_opt ids (draw tape (max 1 (List.length ids))) in
+                 let message =
+                   match draw tape 4 with
+                   | 0 -> Choose (pick ())
+                   | 1 -> Suffix [| ""; "!" |].(draw tape 2)
+                   | 2 -> Option.fold ~none:Grow ~some:(fun id -> Drop id) (pick ())
+                   | _ -> Grow
+                 in
+                 let previous = !model.rows in
+                 model := mark_update message !model;
+                 Program.dispatch program message;
+                 Program.flush program;
+                 (match message with
+                 | Drop id ->
+                     dropped := !dropped + List.length (List.filter (fun item -> item.id = id) previous);
+                     leaving :=
+                       !leaving
+                       + Array.length
+                           (Js.Array.filter
+                              ~f:(fun node -> Js.String.includes ~search:"row-leave" (class_name node))
+                              (nodes (select_all root "li")))
+                 | Choose _ | Suffix _ | Flip _ | Grow -> ());
+                 advance 100)
+               (List.init (Array.length values / 3) Fun.id);
+             let expected = Program.sandbox ~init:!model ~update:mark_update ~view:glide_view fresh in
+             Program.flush expected;
+             let seen = (shapes (as_node root), !leaving) and wanted = (shapes (as_node fresh), !dropped) in
+             Program.stop program;
+             Program.stop expected;
+             use_real_timers ();
+             expect seen |. to_equal wanted))
+        [%mel.obj { numRuns = 200 }]);
     test "after any change of subscriptions, a hash change sends exactly the current ones' messages"
       (fun () ->
         check

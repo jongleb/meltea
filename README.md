@@ -57,6 +57,8 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   gets the model's value back if the update did not take the input.
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
 - **Server.** `Program.render` writes HTML, `~start:Program.hydrate` takes it over in the browser.
+- **Transitions.** `Html.transition ~name` and `Html.transition_group ~name` animate what enters,
+  leaves and moves with CSS classes, as Vue's `<Transition>` and `<TransitionGroup>`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/fields-dark.svg">
@@ -85,6 +87,31 @@ const view = (count, dispatch) =>
     …
   });
 ```
+
+## Transitions
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/transition-dark.svg">
+  <img src="assets/transition.svg" alt="Transitions, as Vue's Transition and TransitionGroup, with name fade. Enter: in the patch the new row b gets fade-enter-from and fade-enter-active, two frames later fade-enter-to replaces fade-enter-from while CSS animates, and when the duration is up no classes are left. Leave: the removed row b is put back where it was with fade-leave-from and fade-leave-active, two frames later fade-leave-to, and when the duration is up it leaves the DOM. Move, in a group: row c went first, so after the patch the DOM is c a b but a transform shows every moved row where it was; two frames later the rows get fade-move and the transforms are cleared, so they slide to their new places; at the end no classes are left" width="100%">
+</picture>
+
+```ocaml
+let view model =
+  <ul className="todo-list">
+    (Html.transition_group ~name:"fade" (Html.list (List.map row (visible model))))
+  </ul>
+```
+
+```css
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+.fade-enter-active, .fade-leave-active, .fade-move { transition: all 200ms; }
+```
+
+The wrapper stays mounted while what it shows changes. An element that appears gets
+`fade-enter-from` and `fade-enter-active`, then `fade-enter-to` from the next frame; one that goes
+stays where it was with the `leave` classes until its transition ends. The time is `~duration`
+milliseconds, or the longest delay plus duration in the element's computed style. The first render
+does not animate.
 
 ## TodoMVC
 
@@ -116,7 +143,7 @@ after every step.
 | module | what it gives |
 |---|---|
 | `Program` | `sandbox ~init ~update ~view root`, `element ~init ~update ~view ~subscriptions root`, `dispatch`, `flush`, `stop`; `render ~view model` for the server and `~start:Program.hydrate` to take its HTML over |
-| `Html` | `text`, `int`, `float`, `none`, `list`, `keyed`, `map`, `memo` (Elm's `lazy`) |
+| `Html` | `text`, `int`, `float`, `none`, `list`, `keyed`, `map`, `memo` (Elm's `lazy`), `transition` and `transition_group` (`~name`, `?duration`) |
 | `Cmd` | `none`, `batch`, `map`, `message`, `perform` (a promise), `focus` (an element by id, after the next draw), `port` (a value out to JavaScript) |
 | `Sub` | `none`, `batch`, `map`, `every`, `hash` (the URL fragment) |
 
