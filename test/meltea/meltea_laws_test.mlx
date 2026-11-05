@@ -206,6 +206,11 @@ let picker_view (shown, tagged) =
 
 external as_element : Dom.node -> Dom.element = "%identity"
 
+let scroll_rows_view ids =
+  <section>
+    (Html.list (List.map (fun id -> <div key=(string_of_int id) onScroll=[ id ]>(Html.int id)</div>) ids))
+  </section>
+
 let derived_writes previous next =
   (match (previous < 0, next < 0) with true, true | false, false -> 0 | _ -> 1)
   + (match (previous mod 3 = 0, next mod 3 = 0) with true, true | false, false -> 0 | _ -> 1)
@@ -448,6 +453,34 @@ let () =
                values;
              Program.stop program;
              expect (List.rev !sent) |. to_equal (List.rev !expected)))
+        [%mel.obj { numRuns = 150 }]);
+    test "a compiled list holds exactly one listener of its own per row, and none once it stops" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:40) (fun values ->
+             let tape = tape values in
+             let adds = spy_on event_target_prototype "addEventListener" in
+             let removes = spy_on event_target_prototype "removeEventListener" in
+             let scrolls spy =
+               List.length
+                 (List.filter (fun call -> String.equal call.(0) "scroll") (Array.to_list (calls (mock spy))))
+             in
+             let root = create_element document "div" in
+             let program = Program.sandbox ~init:[] ~update:(fun next _ -> next) ~view:scroll_rows_view root in
+             let seen =
+               List.map
+                 (fun _ ->
+                   let ids = List.filter (fun _ -> draw tape 3 > 0) [ 0; 1; 2; 3; 4; 5 ] in
+                   let ids = match draw tape 2 with 0 -> ids | _ -> List.rev ids in
+                   Program.dispatch program ids;
+                   Program.flush program;
+                   (scrolls adds - scrolls removes, List.length ids))
+                 (List.init (Array.length values / 2) Fun.id)
+             in
+             Program.stop program;
+             let left = scrolls adds - scrolls removes in
+             restore adds;
+             restore removes;
+             expect (List.map fst seen, left) |. to_equal (List.map snd seen, 0)))
         [%mel.obj { numRuns = 150 }]);
     test "after any change of subscriptions, a hash change sends exactly the current ones' messages"
       (fun () ->

@@ -226,9 +226,9 @@ and child frontend item =
           Some
             (Markup.Slot
                ( Child_slot,
-                 Option.value
-                   ~default:[%expr [%e frontend.unwrap loc (frontend.map item)]]
-                   (frontend.each loc item) )))
+                 match frontend.each loc item with
+                 | Some loop -> loop
+                 | None -> frontend.unwrap loc (frontend.map item) )))
 
 let row_marker = "melhole.row"
 
@@ -547,13 +547,14 @@ let loop frontend ~loc ~definitions ~view ~stable ~render row items =
                   (marked body)
             | _ -> None)
       in
-      Some
-        (Option.value compiled_rows
-           ~default:
-             [%expr
-               Melhole.View.each [%e items]
-                 [%e uncurried [%expr fun __melhole_item -> [%e render [%expr [%e frontend.map row] __melhole_item]]]]
-                 [%e uncurried project] [%e outer]])
+      match compiled_rows with
+      | Some rows -> Some rows
+      | None ->
+          Some
+            [%expr
+              Melhole.View.each [%e items]
+                [%e uncurried [%expr fun __melhole_item -> [%e render [%expr [%e frontend.map row] __melhole_item]]]]
+                [%e uncurried project] [%e outer]]
 
 let fragment frontend ~loc items =
   frontend.wrap loc

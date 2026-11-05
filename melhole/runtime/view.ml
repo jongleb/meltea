@@ -20,7 +20,7 @@ type hosted = ..
 
 (** A mounted row of a compiled loop: its root, scope and holes, and the witness of their type. *)
 type mounted_row =
-  | Mounted_row : { root : Dom.element; scope : scope; holes : 'holes; witness : 'holes Type.Id.t } -> mounted_row
+  | Mounted_row : { root : Dom.element; scope : scope; holes : 'holes; witness : 'holes Witness.t } -> mounted_row
 
 (** What a mounted child is, so that the next child can tell whether it can patch it. *)
 type state =
@@ -92,7 +92,7 @@ type 'holes template = {
   markup : Template.t;
   holes : (scope -> Dom.node -> 'holes[@u]);
   mutable lent : 'holes option;  (** The holes of a mounted clone, handed over to one refresh. *)
-  witness : 'holes Type.Id.t;  (** Proves that holes made by this template have its type. *)
+  witness : 'holes Witness.t;  (** Proves that holes made by this template have its type. *)
 }
 
 (** One row of a compiled loop before it is mounted: its template, how to write its holes, its key. *)
@@ -547,7 +547,10 @@ let settle position root scope =
   scope.placement <- Placed;
   List.iter (fun reference -> reference () [@u]) (List.rev scope.references)
 
-let let_go scope = List.iter (fun cleanup -> cleanup () [@u]) (List.rev scope.cleanups)
+let let_go scope =
+  match scope.cleanups with
+  | [] -> ()
+  | cleanups -> List.iter (fun cleanup -> cleanup () [@u]) (List.rev cleanups)
 
 let place position root scope state =
   settle position root scope;
@@ -561,7 +564,7 @@ let place position root scope state =
 let unset = Input (ref ())
 let fresh count = { deps = Array.make count unset; cleanups = []; references = []; placement = Detached }
 
-let template markup holes = { markup; holes; lent = None; witness = Type.Id.make () }
+let template markup holes = { markup; holes; lent = None; witness = Witness.make () }
 
 let row template slots refresh key = { template; slots; refresh; key }
 
@@ -584,7 +587,12 @@ let rows (type holes item) (items : item array) (render : (item -> holes row)[@u
       front =
         (fun [@u] after ->
           match Array.length rows with 0 -> after | _ -> Js.Null.return (root_of (Array.unsafe_get rows 0)));
-      release = (fun [@u] () -> Array.iter (fun (Mounted_row row) -> let_go row.scope) rows);
+      release =
+        (fun [@u] () ->
+          for index = 0 to Array.length rows - 1 do
+            let (Mounted_row row) = Array.unsafe_get rows index in
+            let_go row.scope
+          done);
     }
   in
   let drop (position : Template.position) (Mounted_row row) =
@@ -659,7 +667,7 @@ let rows (type holes item) (items : item array) (render : (item -> holes row)[@u
               | Kept _ -> render (Array.unsafe_get items index) [@u]
             in
             let refreshed (Mounted_row row as mounted) (parts : holes row) =
-              match Type.Id.provably_equal row.witness parts.template.witness with
+              match Witness.equal row.witness parts.template.witness with
               | Some Equal ->
                   parts.refresh row.scope row.holes [@u];
                   mounted
@@ -707,7 +715,10 @@ let rows (type holes item) (items : item array) (render : (item -> holes row)[@u
                 (match whole with
                 | `Whole ->
                     Dom_api.set_text_content position.parent "";
-                    Array.iter (fun (Mounted_row row) -> let_go row.scope) old.rows
+                    for index = 0 to old_count - 1 do
+                      let (Mounted_row row) = Array.unsafe_get old.rows index in
+                      let_go row.scope
+                    done
                 | `Part -> List.iter (fun i -> drop position (Array.unsafe_get old.rows i)) plan.dropped);
                 let carried i j =
                   match Array.unsafe_get next j with
