@@ -115,6 +115,7 @@ let mapper =
     val mutable tracked : (string * string) list = []
 
     method! structure items =
+      let items = Fanout.annotate items in
       let known = tracked in
       let mapped =
         List.concat_map

@@ -7,7 +7,7 @@ license: "MIT"
 homepage: "https://github.com/jongleb/melact"
 bug-reports: "https://github.com/jongleb/melact/issues"
 depends: [
-  "ocaml" {>= "5.3"}
+  "ocaml" {>= "5.4"}
   "dune" {>= "3.16" & >= "3.16"}
   "ppxlib" {>= "0.34"}
   "melhole"

@@ -49,6 +49,15 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   immutable values make this exact: an unchanged reference is an unchanged value.
 - **Fields.** The compiler reads `update` and `view`: which model fields each message can change,
   which fields the view reads. A message that changes nothing the view reads does not call it.
+- **Fanout.** The compiler follows each frequent event (typing, keys, pointer moves, scroll) to the
+  message it sends, the fields that message's branch writes and the lists that read them. When
+  typing in a field would make a list check all its rows on every keystroke, it says so at the
+  handler, as a compiler alert.
+
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/fanout-dark.svg">
+    <img src="assets/fanout.svg" alt="Fanout in TodoMVC: the edit field's onInput sends Retype, which writes editing, which the list reads, so the compiler raises the alert fanout at the handler; the new-todo field's onInput sends Type, which writes field, which no list reads" width="100%">
+  </picture>
 - **Lists.** `Html.list (List.map row items)` is a keyed loop with selectors: a row is rendered
   again only when its item is another object or a piece of it that reads outer values changed.
 - **Events.** `onClick=Increment` sends a message. `onInput` and `onKeyDown` take a function of

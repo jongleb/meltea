@@ -3,4 +3,4 @@
 
 (test
  (name laws)
- (libraries qcheck-core qcheck-core.runner melhole.compiler))
+ (libraries qcheck-core qcheck-core.runner ppxlib melhole.compiler meltea-ppx))

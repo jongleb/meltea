@@ -488,5 +488,115 @@ let dom_props_laws =
           all);
   ]
 
+
+(** What one handler of a generated view does. *)
+type sends =
+  | On_input of int  (** Every input event sends this message. *)
+  | On_key of int * int  (** Enter sends the first, any other key the second. *)
+  | On_click of int  (** A click, which is not a frequent event. *)
+
+(** A generated module: fields each message writes, what each local and list reads, the handlers. *)
+type program = {
+  writes : int list array;
+  locals : (int list * int list) list;  (** Fields and earlier locals each local reads. *)
+  lists : (int list * int list) list;
+  handlers : sends list;
+}
+
+let fanout_program =
+  let open Gen in
+  let subset bound = map (fun bits -> List.filter (fun index -> bits land (1 lsl index) <> 0) (List.init bound Fun.id)) (int_bound ((1 lsl bound) - 1)) in
+  let* writes = array_size (pure 4) (subset 5) in
+  let* count = int_bound 3 in
+  let* locals = flatten_list (List.init count (fun index -> pair (subset 5) (subset index))) in
+  let* lists = list_size (int_range 1 2) (pair (subset 5) (subset count)) in
+  let* handlers =
+    list_size (int_bound 4)
+      (oneof
+         [
+           map (fun message -> On_input message) (int_bound 3);
+           map2 (fun enter other -> On_key (enter, other)) (int_bound 3) (int_bound 3);
+           map (fun message -> On_click message) (int_bound 3);
+         ])
+  in
+  pure { writes; locals; lists; handlers }
+
+let fanout_source program =
+  let reads (fields, locals) =
+    match List.map (Printf.sprintf "model.f%d") fields @ List.map (Printf.sprintf "l%d") locals with
+    | [] -> "()"
+    | parts -> "(" ^ String.concat ", " parts ^ ", ())"
+  in
+  let update =
+    "let update message model =\n  match message with\n"
+    ^ String.concat ""
+        (Array.to_list
+           (Array.mapi
+              (fun index written ->
+                match written with
+                | [] -> Printf.sprintf "  | M%d -> model\n" index
+                | _ ->
+                    Printf.sprintf "  | M%d -> { model with %s }\n" index
+                      (String.concat "; " (List.map (fun field -> Printf.sprintf "f%d = model.f%d" field field) written)))
+              program.writes))
+  in
+  let lines =
+    [ "let view model =" ]
+    @ List.mapi (fun index local -> Printf.sprintf "  let l%d = %s in" index (reads local)) program.locals
+    @ [ "  ((div ~children:[" ]
+    @ List.map (fun list -> Printf.sprintf "    Html.list (List.map row %s);" (reads list)) program.lists
+    @ List.map
+        (fun handler ->
+          match handler with
+          | On_input message -> Printf.sprintf "    ((input ~onInput:(fun text -> M%d) ()) [@JSX]);" message
+          | On_key (enter, other) ->
+              Printf.sprintf "    ((input ~onKeyDown:(fun key -> match key with \"Enter\" -> M%d | _ -> M%d) ()) [@JSX]);" enter other
+          | On_click message -> Printf.sprintf "    ((button ~onClick:M%d ()) [@JSX]);" message)
+        program.handlers
+    @ [ "  ] ()) [@JSX])" ]
+  in
+  let header = String.split_on_char '\n' update in
+  (update ^ String.concat "\n" lines, List.length header)
+
+let fanout_expected program =
+  let rec closure (fields, locals) =
+    List.sort_uniq compare (fields @ List.concat_map (fun local -> closure (List.nth program.locals local)) locals)
+  in
+  let reached message =
+    List.exists
+      (fun list -> List.exists (fun field -> List.mem field (closure list)) program.writes.(message))
+      program.lists
+  in
+  List.filter_map Fun.id
+    (List.mapi
+       (fun index handler ->
+         let sends = match handler with On_input message -> [ message ] | On_key (_, other) -> [ other ] | On_click _ -> [] in
+         match List.exists reached sends with true -> Some index | false -> None)
+       program.handlers)
+
+let fanout_alerted program =
+  let source, first = fanout_source program in
+  let lexbuf = Lexing.from_string source in
+  let items = Ppxlib.Parse.implementation lexbuf in
+  let handler_line = first + List.length program.locals + 1 + List.length program.lists + 1 in
+  let found =
+    object
+      inherit [int list] Ppxlib.Ast_traverse.fold as super
+
+      method! expression expression lines =
+        match expression.pexp_desc with
+        | Pexp_letmodule ({ txt = Some "Melhole_fanout"; _ }, _, _) ->
+            super#expression expression ((expression.pexp_loc.loc_start.pos_lnum - handler_line) :: lines)
+        | _ -> super#expression expression lines
+    end
+  in
+  List.sort_uniq compare (found#structure (Meltea_ppx.Fanout.annotate items) [])
+
+let fanout_laws =
+  [
+    Test.make ~name:"Fanout: an alert stands at exactly the frequent handlers whose messages write a field a list reads"
+      ~count:500 fanout_program (fun program -> fanout_alerted program = fanout_expected program);
+  ]
+
 let () =
-  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ dom_props_laws))
+  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ dom_props_laws @ fanout_laws))

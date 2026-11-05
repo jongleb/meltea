@@ -139,7 +139,7 @@ let row editing todo =
            className="edit"
            id=("edit-" ^ string_of_int todo.id)
            value=text
-           onInput=(fun text -> Retype text)
+           onInput=((fun text -> Retype text) [@alert "-fanout"])
            onBlur=Commit
            onKeyDown=(fun key ->
              match key with "Enter" -> Commit | "Escape" -> Cancel | _ -> Ignore) />)
