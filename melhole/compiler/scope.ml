@@ -4,18 +4,29 @@ class mapper =
   object (self)
     inherit Ast_traverse.map as super
     val mutable locals : string list = []
+    val mutable definitions : (string * expression) list = []
     method locals = locals
+    method definitions = definitions
 
     method private within : 'a. string list -> (unit -> 'a) -> 'a =
       fun names run ->
-        let saved = locals in
+        let saved = locals and known = definitions in
         locals <- names @ locals;
+        definitions <-
+          List.filter
+            (fun (name, definition) ->
+              match Free.of_expression definition with
+              | Reads read -> not (List.exists (fun bound -> List.mem bound names) (name :: read))
+              | Volatile -> not (List.mem name names))
+            definitions;
         match run () with
         | result ->
             locals <- saved;
+            definitions <- known;
             result
         | exception error ->
             locals <- saved;
+            definitions <- known;
             raise error
 
     method! case case = self#within (Free.bound case.pc_lhs) (fun () -> super#case case)
@@ -29,7 +40,29 @@ class mapper =
             | Recursive -> self#within names (fun () -> List.map self#value_binding bindings)
             | Nonrecursive -> List.map self#value_binding bindings
           in
-          let body = self#within names (fun () -> self#expression body) in
+          let defined =
+            match flag with
+            | Recursive -> []
+            | Nonrecursive ->
+                List.filter_map
+                  (fun binding ->
+                    match binding.pvb_pat.ppat_desc with
+                    | Ppat_var { txt; _ } -> Some (txt, binding.pvb_expr)
+                    | _ -> None)
+                  bindings
+          in
+          let body =
+            self#within names (fun () ->
+                let known = definitions in
+                definitions <- defined @ definitions;
+                match self#expression body with
+                | result ->
+                    definitions <- known;
+                    result
+                | exception error ->
+                    definitions <- known;
+                    raise error)
+          in
           { expression with pexp_desc = Pexp_let (flag, bindings, body) }
       | Pexp_function (params, constraint_, body) ->
           let rec go params mapped =

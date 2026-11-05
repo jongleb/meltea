@@ -18,16 +18,14 @@ let start course ~view initial root =
   let model = ref initial and schedule = ref Idle and sink = ref ignore in
   let dispatch message = !sink message in
   let mounted =
-    let (Html.Node render) = view initial in
-    View.mount (render dispatch) ~parent:root ~before:None
+    View.mount (Html.render (view initial) dispatch) ~parent:root ~before:None
   in
   let draw () =
     match !schedule with
     | Idle -> ()
     | Queued ->
         schedule := Idle;
-        let (Html.Node render) = view !model in
-        View.patch mounted (render dispatch);
+        View.patch mounted (Html.render (view !model) dispatch);
         course.drawn !model dispatch
   in
   sink :=

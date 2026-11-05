@@ -5,4 +5,7 @@ type t =
   | Volatile  (** It may read mutable state, or the analysis cannot tell. *)
 
 val of_expression : Ppxlib.expression -> t
+
+val closure :
+  definitions:(string * Ppxlib.expression) list -> locals:string list -> Ppxlib.expression -> t
 val bound : Ppxlib.pattern -> string list

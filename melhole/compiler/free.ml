@@ -97,3 +97,22 @@ let of_expression expression =
   match reads [] expression with
   | names -> Reads (List.sort_uniq String.compare names)
   | exception Unknown -> Volatile
+
+let closure ~definitions ~locals expression =
+  let rec expand visited pending collected =
+    match pending with
+    | [] -> Reads (List.sort_uniq String.compare collected)
+    | name :: rest when List.mem name visited -> expand visited rest collected
+    | name :: rest -> (
+        match List.assoc_opt name definitions with
+        | None ->
+            expand (name :: visited) rest
+              (if List.mem name locals then name :: collected else collected)
+        | Some definition -> (
+            match reads [] definition with
+            | more -> expand (name :: visited) (more @ rest) collected
+            | exception Unknown -> Volatile))
+  in
+  match reads [] expression with
+  | names -> expand [] names []
+  | exception Unknown -> Volatile

@@ -23,12 +23,10 @@ let mapper =
         Element.name = "meltea";
         locals = "__melhole_dispatch" :: self#locals;
         map = self#expression;
-        wrap = (fun loc child -> [%expr Html.Node (fun __melhole_dispatch -> [%e child])]);
+        wrap = (fun loc child -> [%expr Html.node (fun __melhole_dispatch -> [%e child])]);
         unwrap =
           (fun loc element ->
-            [%expr
-              let (Html.Node __melhole_render) = [%e element] in
-              __melhole_render __melhole_dispatch]);
+            [%expr Html.render [%e element] __melhole_dispatch]);
         handler =
           (fun loc { label; requirement; value; _ } ->
             let send message =
@@ -68,6 +66,43 @@ let mapper =
           (fun name ->
             match name with
             | "onCheck" -> Some (Dom_props.Handler ("change", "Form"))
+            | _ -> None);
+        each =
+          (fun loc item ->
+            match item.pexp_desc with
+            | Pexp_apply
+                ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "list"); _ }; _ },
+                  [
+                    ( Nolabel,
+                      {
+                        pexp_desc =
+                          Pexp_apply
+                            ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "List", "map"); _ }; _ },
+                              [ (Nolabel, row); (Nolabel, items) ] );
+                        _;
+                      } );
+                  ] ) -> (
+                match Free.closure ~definitions:self#definitions ~locals:self#locals row with
+                | Volatile -> None
+                | Reads names ->
+                    let render =
+                      Ast_builder.Default.pexp_record ~loc
+                        [
+                          ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I1"); loc },
+                            [%expr
+                              fun __melhole_item ->
+                                Html.render ([%e self#expression row] __melhole_item) __melhole_dispatch] );
+                        ]
+                        None
+                    in
+                    Some
+                      [%expr
+                        Melhole.View.each [%e self#expression items] [%e render]
+                          [%e
+                            Ast_builder.Default.pexp_array ~loc
+                              (List.map
+                                 (fun name -> [%expr Melhole.View.Input [%e Ast_builder.Default.evar ~loc name]])
+                                 ("__melhole_dispatch" :: names))]])
             | _ -> None);
       }
 

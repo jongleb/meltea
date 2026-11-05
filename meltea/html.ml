@@ -1,6 +1,8 @@
 open Melhole
 
-type 'msg t = Node of (('msg -> unit) -> View.child) [@@unboxed]
+type 'msg t = ('msg -> unit) -> View.child
+
+external node : (('msg -> unit) -> View.child) -> 'msg t = "%identity"
 
 external target : Dom.event -> Dom.element = "target" [@@mel.get]
 external value : Dom.element -> string = "value" [@@mel.get]
@@ -8,27 +10,20 @@ external checked : Dom.element -> bool = "checked" [@@mel.get]
 external event_key : Dom.event -> string = "key" [@@mel.get]
 external prevent : Dom.event -> unit = "preventDefault" [@@mel.send]
 
-let none = Node (fun _ -> View.empty)
-let text content = Node (fun _ -> View.text content)
-let int number = Node (fun _ -> View.text (string_of_int number))
-let float number = Node (fun _ -> View.text (Js.Float.toString number))
+let render view dispatch = view dispatch
+let none _ = View.empty
+let text content _ = View.text content
+let int number _ = View.text (string_of_int number)
+let float number _ = View.text (Js.Float.toString number)
 
-let list views =
-  Node (fun dispatch -> View.list (List.map (fun (Node render) -> render dispatch) views))
+let list views dispatch = View.list (List.map (fun view -> view dispatch) views)
 
-let keyed views =
-  Node
-    (fun dispatch ->
-      View.keyed (List.map (fun (key, Node render) -> (key, render dispatch)) views))
+let keyed views dispatch = View.keyed (List.map (fun (key, view) -> (key, view dispatch)) views)
 
-let map tag (Node render) = Node (fun dispatch -> render (fun message -> dispatch (tag message)))
+let map tag view dispatch = view (fun message -> dispatch (tag message))
 
-let memo view model =
-  Node
-    (fun dispatch ->
-      View.memo [| View.Input view; View.Input model |] (fun () ->
-          let (Node render) = view model in
-          render dispatch))
+let memo view model dispatch =
+  View.memo [| View.Input view; View.Input model |] (fun () -> view model dispatch)
 
 let target_value event = value (target event)
 let target_checked event = checked (target event)

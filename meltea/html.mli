@@ -2,7 +2,10 @@
     meltea-ppx compiles each JSX tree to a template. *)
 
 (** A view sending ['msg]: given the program's dispatch, the content to show. *)
-type 'msg t = Node of (('msg -> unit) -> Melhole.View.child) [@@unboxed]
+type 'msg t
+
+external node : (('msg -> unit) -> Melhole.View.child) -> 'msg t = "%identity"
+val render : 'msg t -> ('msg -> unit) -> Melhole.View.child
 
 val none : 'msg t
 val text : string -> 'msg t

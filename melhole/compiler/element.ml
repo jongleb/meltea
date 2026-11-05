@@ -23,6 +23,7 @@ type frontend = {
   reference : location -> [ `Required | `Optional ] -> expression -> expression;
   classify : expression -> special option;
   extra : string -> Dom_props.kind option;
+  each : location -> expression -> expression option;
 }
 
 (** What one DOM prop becomes. *)
@@ -223,7 +224,9 @@ and child frontend item =
           Some
             (Markup.Slot
                ( Child_slot,
-                 [%expr [%e frontend.unwrap loc (frontend.map item)]] )))
+                 Option.value
+                   ~default:[%expr [%e frontend.unwrap loc (frontend.map item)]]
+                   (frontend.each loc item) )))
 
 let lowercase frontend ~loc tag arguments =
   let element, key = analyse frontend ~loc tag arguments in

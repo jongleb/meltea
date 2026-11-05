@@ -35,6 +35,14 @@ type state =
   | Static_state of Template.t
   | Paths_state of Template.t * (hole array -> unit)  (** Writes the next values to its holes. *)
   | Instance_state of instance
+  | Each_state : {
+      items : 'item array;
+      children : child array;  (** What each item rendered to. *)
+      keys : string array;
+      outer : input array;  (** What the rendering reads besides the item. *)
+      lives : live array;
+    }
+      -> state
 
 (** A mounted child: its own nodes and how to let go of what they hold. *)
 and live = {
@@ -138,9 +146,11 @@ let remove (position : Template.position) live =
 type extent = Whole | Part
 
 let extent (position : Template.position) live =
+  let last = ref Js.null in
+  live.each (fun [@u] node -> last := Js.Null.return node) [@u];
   match
-    ( Dom_api.same position.before Js.null,
-      Dom_api.same (live.front Js.null [@u]) (Template.first_or_end position.parent) )
+    ( Dom_api.same (live.front Js.null [@u]) (Template.first_or_end position.parent),
+      Dom_api.same !last (Dom_api.last_child position.parent) )
   with
   | true, true -> Whole
   | true, false | false, _ -> Part
@@ -276,6 +286,91 @@ let keyed entries =
   }
 
 let with_key key child = { child with shape = Entry (key, child) }
+
+let each items render outer =
+  let items = Array.of_list items in
+  let count = Array.length items in
+  let key index child =
+    match child.shape with
+    | Entry (key, _) -> key
+    | Single | Nothing | Many _ | Entries _ | Deferred _ -> string_of_int index
+  in
+  let rendered index item =
+    let child = render item [@u] in
+    (child, key index child)
+  in
+  {
+    shape = Single;
+    build =
+      (fun [@u] position ->
+        let children = Array.make count empty and keys = Array.make count "" in
+        Array.iteri
+          (fun index item ->
+            let child, key = rendered index item in
+            Array.unsafe_set children index child;
+            Array.unsafe_set keys index key)
+          items;
+        let lives = Array.map (fun child -> child.build position [@u]) children in
+        group (Each_state { items; children; keys; outer; lives }) lives);
+    patch =
+      (fun [@u] position live ->
+        match live.state with
+        | Each_state old ->
+            let old_count = Array.length old.items in
+            let children = Array.make count empty and keys = Array.make count "" in
+            let reuse index from =
+              Array.unsafe_set children index (Array.unsafe_get old.children from);
+              Array.unsafe_set keys index (Array.unsafe_get old.keys from)
+            in
+            let fill index item =
+              let child, key = rendered index item in
+              Array.unsafe_set children index child;
+              Array.unsafe_set keys index key
+            in
+            let held from item =
+              from >= 0 && from < old_count && Dom_api.same (Array.unsafe_get old.items from) item
+            in
+            (match compare_inputs old.outer outer with
+            | Changed -> Array.iteri fill items
+            | Unchanged ->
+                let shift = ref 0 in
+                Array.iteri
+                  (fun index item ->
+                    if held (index + !shift) item then reuse index (index + !shift)
+                    else if held (index + !shift + 1) item then (
+                      incr shift;
+                      reuse index (index + !shift))
+                    else if held (index + !shift - 1) item then (
+                      decr shift;
+                      reuse index (index + !shift))
+                    else fill index item)
+                  items);
+            let plan = Reconcile.plan ~old:old.keys ~next:keys in
+            (match (List.compare_length_with plan.dropped old_count, extent position live) with
+            | 0, Whole ->
+                Dom_api.set_text_content position.parent "";
+                live.release () [@u]
+            | _, (Whole | Part) ->
+                List.iter (fun i -> remove position (Array.unsafe_get old.lives i)) plan.dropped);
+            let carried at i j =
+              let child = Array.unsafe_get children j in
+              match Dom_api.same child (Array.unsafe_get old.children i) with
+              | true -> Array.unsafe_get old.lives i
+              | false -> update at (Array.unsafe_get old.lives i) child
+            in
+            let lives =
+              backwards count position (fun [@u] j at ->
+                  match Array.unsafe_get plan.steps j with
+                  | Create -> (Array.unsafe_get children j).build at [@u]
+                  | Keep i -> carried at i j
+                  | Move i ->
+                      let live = carried at i j in
+                      live.each (fun [@u] node -> insert at node) [@u];
+                      live)
+            in
+            Some (group (Each_state { items; children; keys; outer; lives }) lives)
+        | _ -> None);
+  }
 
 let list children =
   let rec entries collected children =

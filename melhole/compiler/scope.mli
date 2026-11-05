@@ -5,4 +5,5 @@ class mapper : object
   inherit Ppxlib.Ast_traverse.map
 
   method locals : string list
+  method definitions : (string * Ppxlib.expression) list
 end

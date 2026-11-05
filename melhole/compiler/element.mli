@@ -31,6 +31,8 @@ type frontend = {
       (** The hole value of a [ref] prop. *)
   classify : Ppxlib.expression -> special option;
   extra : string -> Dom_props.kind option;  (** Props the front end adds to reason-react's. *)
+  each : Ppxlib.location -> Ppxlib.expression -> Ppxlib.expression option;
+      (** A keyed loop for a child that maps a row function over a list. *)
 }
 
 val without_jsx : Ppxlib.attributes -> Ppxlib.attributes option
