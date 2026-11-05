@@ -65,7 +65,7 @@ let mapper =
         extra =
           (fun name ->
             match name with
-            | "onCheck" -> Some (Dom_props.Handler ("change", "Form"))
+            | "onCheck" -> Some (Dom_props.Handler "change")
             | _ -> None);
         each =
           (fun loc item ->

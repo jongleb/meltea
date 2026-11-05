@@ -474,10 +474,7 @@ let dom_props_laws =
                 && (String.length label < 5
                    || (not (String.sub label 0 4 = "aria" && Char.uppercase_ascii label.[4] = label.[4]))
                    || String.equal name ("aria-" ^ String.lowercase_ascii (String.sub label 4 (String.length label - 4))))
-            | Handler (event, family) ->
-                String.for_all (fun character -> character >= 'a' && character <= 'z') event
-                && String.length family > 0
-                && Char.uppercase_ascii family.[0] = family.[0]
+            | Handler event -> String.for_all (fun character -> character >= 'a' && character <= 'z') event
             | Style | Ref | Inner_html | Ignored -> true)
           all);
   ]

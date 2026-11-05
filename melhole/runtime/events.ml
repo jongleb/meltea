@@ -25,12 +25,17 @@ let bind element event =
             delegated_types := event :: !delegated_types;
             Dom_api.add_document_listener Dom_api.document event (fun native ->
                 let rec bubble node =
-                  Option.iter (fun handle -> handle native) (Dom_api.handler node key);
+                  Option.iter
+                    (fun handle ->
+                      Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
+                      handle native)
+                    (Dom_api.handler node key);
                   match Dom_api.cancel_bubble native with
                   | true -> ()
                   | false -> Option.iter bubble (Dom_api.parent_node node)
                 in
-                Option.iter bubble (Dom_api.target native)));
+                Option.iter bubble (Dom_api.target native);
+                Dom_api.release_current_target native));
         Delegated
     | _ ->
         let listener native =

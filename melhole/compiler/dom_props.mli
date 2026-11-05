@@ -22,7 +22,7 @@ type kind =
   | Property of string * value  (** The JS property name. *)
   | Controlled of string * value
       (** A property the user changes too ([value], [checked]): put back after input. *)
-  | Handler of string * string  (** The DOM event and the [ReactEvent] family. *)
+  | Handler of string  (** The DOM event. *)
   | Style
   | Ref
   | Inner_html  (** [dangerouslySetInnerHTML]. *)

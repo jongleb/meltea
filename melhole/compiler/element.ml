@@ -7,7 +7,6 @@ type special = Text of text * expression | Nothing
 type handler = {
   label : string;
   event : string;
-  family : string;
   requirement : [ `Required | `Optional ];
   value : expression;
 }
@@ -134,8 +133,8 @@ let prop frontend ~loc ~label kind requirement value =
           (Option.map Js.Float.toString ([%e value] : float option))]
   | Property (name, kind), requirement, _ -> property (Prop name) kind requirement
   | Controlled (name, kind), requirement, _ -> property (Control name) kind requirement
-  | Handler (event, family), requirement, _ ->
-      hole (Handler event) (frontend.handler loc { label; event; family; requirement; value })
+  | Handler event, requirement, _ ->
+      hole (Handler event) (frontend.handler loc { label; event; requirement; value })
   | Style, requirement, _ -> hole Style (frontend.style loc requirement value)
   | Ref, requirement, _ -> hole Ref (frontend.reference loc requirement value)
   | Inner_html, `Required, _ ->

@@ -510,7 +510,7 @@ type kind =
   | Attribute of string * value
   | Property of string * value
   | Controlled of string * value
-  | Handler of string * string
+  | Handler of string
   | Style
   | Ref
   | Inner_html
@@ -686,83 +686,83 @@ let kind (prop : Prop.t) =
   | Value -> Controlled ("value", Text)
   | Width -> Attribute ("width", Text)
   | Wrap -> Attribute ("wrap", Text)
-  | OnCopy -> Handler ("copy", "Clipboard")
-  | OnCut -> Handler ("cut", "Clipboard")
-  | OnPaste -> Handler ("paste", "Clipboard")
-  | OnCompositionEnd -> Handler ("compositionend", "Composition")
-  | OnCompositionStart -> Handler ("compositionstart", "Composition")
-  | OnCompositionUpdate -> Handler ("compositionupdate", "Composition")
-  | OnKeyDown -> Handler ("keydown", "Keyboard")
-  | OnKeyPress -> Handler ("keypress", "Keyboard")
-  | OnKeyUp -> Handler ("keyup", "Keyboard")
-  | OnFocus -> Handler ("focusin", "Focus")
-  | OnBlur -> Handler ("focusout", "Focus")
-  | OnChange -> Handler ("input", "Form")
-  | OnInput -> Handler ("input", "Form")
-  | OnSubmit -> Handler ("submit", "Form")
-  | OnInvalid -> Handler ("invalid", "Form")
-  | OnClick -> Handler ("click", "Mouse")
-  | OnContextMenu -> Handler ("contextmenu", "Mouse")
-  | OnDoubleClick -> Handler ("dblclick", "Mouse")
-  | OnDrag -> Handler ("drag", "Drag")
-  | OnDragEnd -> Handler ("dragend", "Drag")
-  | OnDragEnter -> Handler ("dragenter", "Drag")
-  | OnDragExit -> Handler ("dragexit", "Drag")
-  | OnDragLeave -> Handler ("dragleave", "Drag")
-  | OnDragOver -> Handler ("dragover", "Drag")
-  | OnDragStart -> Handler ("dragstart", "Drag")
-  | OnDrop -> Handler ("drop", "Drag")
-  | OnMouseDown -> Handler ("mousedown", "Mouse")
-  | OnMouseEnter -> Handler ("mouseenter", "Mouse")
-  | OnMouseLeave -> Handler ("mouseleave", "Mouse")
-  | OnMouseMove -> Handler ("mousemove", "Mouse")
-  | OnMouseOut -> Handler ("mouseout", "Mouse")
-  | OnMouseOver -> Handler ("mouseover", "Mouse")
-  | OnMouseUp -> Handler ("mouseup", "Mouse")
-  | OnSelect -> Handler ("select", "Selection")
-  | OnTouchCancel -> Handler ("touchcancel", "Touch")
-  | OnTouchEnd -> Handler ("touchend", "Touch")
-  | OnTouchMove -> Handler ("touchmove", "Touch")
-  | OnTouchStart -> Handler ("touchstart", "Touch")
-  | OnPointerOver -> Handler ("pointerover", "Pointer")
-  | OnPointerEnter -> Handler ("pointerenter", "Pointer")
-  | OnPointerDown -> Handler ("pointerdown", "Pointer")
-  | OnPointerMove -> Handler ("pointermove", "Pointer")
-  | OnPointerUp -> Handler ("pointerup", "Pointer")
-  | OnPointerCancel -> Handler ("pointercancel", "Pointer")
-  | OnPointerOut -> Handler ("pointerout", "Pointer")
-  | OnPointerLeave -> Handler ("pointerleave", "Pointer")
-  | OnGotPointerCapture -> Handler ("gotpointercapture", "Pointer")
-  | OnLostPointerCapture -> Handler ("lostpointercapture", "Pointer")
-  | OnScroll -> Handler ("scroll", "UI")
-  | OnWheel -> Handler ("wheel", "Wheel")
-  | OnAbort -> Handler ("abort", "Media")
-  | OnCanPlay -> Handler ("canplay", "Media")
-  | OnCanPlayThrough -> Handler ("canplaythrough", "Media")
-  | OnDurationChange -> Handler ("durationchange", "Media")
-  | OnEmptied -> Handler ("emptied", "Media")
-  | OnEncrypetd -> Handler ("encrypetd", "Media")
-  | OnEnded -> Handler ("ended", "Media")
-  | OnError -> Handler ("error", "Media")
-  | OnLoadedData -> Handler ("loadeddata", "Media")
-  | OnLoadedMetadata -> Handler ("loadedmetadata", "Media")
-  | OnLoadStart -> Handler ("loadstart", "Media")
-  | OnPause -> Handler ("pause", "Media")
-  | OnPlay -> Handler ("play", "Media")
-  | OnPlaying -> Handler ("playing", "Media")
-  | OnProgress -> Handler ("progress", "Media")
-  | OnRateChange -> Handler ("ratechange", "Media")
-  | OnSeeked -> Handler ("seeked", "Media")
-  | OnSeeking -> Handler ("seeking", "Media")
-  | OnStalled -> Handler ("stalled", "Media")
-  | OnSuspend -> Handler ("suspend", "Media")
-  | OnTimeUpdate -> Handler ("timeupdate", "Media")
-  | OnVolumeChange -> Handler ("volumechange", "Media")
-  | OnWaiting -> Handler ("waiting", "Media")
-  | OnAnimationStart -> Handler ("animationstart", "Animation")
-  | OnAnimationEnd -> Handler ("animationend", "Animation")
-  | OnAnimationIteration -> Handler ("animationiteration", "Animation")
-  | OnTransitionEnd -> Handler ("transitionend", "Transition")
+  | OnCopy -> Handler "copy"
+  | OnCut -> Handler "cut"
+  | OnPaste -> Handler "paste"
+  | OnCompositionEnd -> Handler "compositionend"
+  | OnCompositionStart -> Handler "compositionstart"
+  | OnCompositionUpdate -> Handler "compositionupdate"
+  | OnKeyDown -> Handler "keydown"
+  | OnKeyPress -> Handler "keypress"
+  | OnKeyUp -> Handler "keyup"
+  | OnFocus -> Handler "focusin"
+  | OnBlur -> Handler "focusout"
+  | OnChange -> Handler "input"
+  | OnInput -> Handler "input"
+  | OnSubmit -> Handler "submit"
+  | OnInvalid -> Handler "invalid"
+  | OnClick -> Handler "click"
+  | OnContextMenu -> Handler "contextmenu"
+  | OnDoubleClick -> Handler "dblclick"
+  | OnDrag -> Handler "drag"
+  | OnDragEnd -> Handler "dragend"
+  | OnDragEnter -> Handler "dragenter"
+  | OnDragExit -> Handler "dragexit"
+  | OnDragLeave -> Handler "dragleave"
+  | OnDragOver -> Handler "dragover"
+  | OnDragStart -> Handler "dragstart"
+  | OnDrop -> Handler "drop"
+  | OnMouseDown -> Handler "mousedown"
+  | OnMouseEnter -> Handler "mouseenter"
+  | OnMouseLeave -> Handler "mouseleave"
+  | OnMouseMove -> Handler "mousemove"
+  | OnMouseOut -> Handler "mouseout"
+  | OnMouseOver -> Handler "mouseover"
+  | OnMouseUp -> Handler "mouseup"
+  | OnSelect -> Handler "select"
+  | OnTouchCancel -> Handler "touchcancel"
+  | OnTouchEnd -> Handler "touchend"
+  | OnTouchMove -> Handler "touchmove"
+  | OnTouchStart -> Handler "touchstart"
+  | OnPointerOver -> Handler "pointerover"
+  | OnPointerEnter -> Handler "pointerenter"
+  | OnPointerDown -> Handler "pointerdown"
+  | OnPointerMove -> Handler "pointermove"
+  | OnPointerUp -> Handler "pointerup"
+  | OnPointerCancel -> Handler "pointercancel"
+  | OnPointerOut -> Handler "pointerout"
+  | OnPointerLeave -> Handler "pointerleave"
+  | OnGotPointerCapture -> Handler "gotpointercapture"
+  | OnLostPointerCapture -> Handler "lostpointercapture"
+  | OnScroll -> Handler "scroll"
+  | OnWheel -> Handler "wheel"
+  | OnAbort -> Handler "abort"
+  | OnCanPlay -> Handler "canplay"
+  | OnCanPlayThrough -> Handler "canplaythrough"
+  | OnDurationChange -> Handler "durationchange"
+  | OnEmptied -> Handler "emptied"
+  | OnEncrypetd -> Handler "encrypetd"
+  | OnEnded -> Handler "ended"
+  | OnError -> Handler "error"
+  | OnLoadedData -> Handler "loadeddata"
+  | OnLoadedMetadata -> Handler "loadedmetadata"
+  | OnLoadStart -> Handler "loadstart"
+  | OnPause -> Handler "pause"
+  | OnPlay -> Handler "play"
+  | OnPlaying -> Handler "playing"
+  | OnProgress -> Handler "progress"
+  | OnRateChange -> Handler "ratechange"
+  | OnSeeked -> Handler "seeked"
+  | OnSeeking -> Handler "seeking"
+  | OnStalled -> Handler "stalled"
+  | OnSuspend -> Handler "suspend"
+  | OnTimeUpdate -> Handler "timeupdate"
+  | OnVolumeChange -> Handler "volumechange"
+  | OnWaiting -> Handler "waiting"
+  | OnAnimationStart -> Handler "animationstart"
+  | OnAnimationEnd -> Handler "animationend"
+  | OnAnimationIteration -> Handler "animationiteration"
+  | OnTransitionEnd -> Handler "transitionend"
   | AccentHeight -> Attribute ("accent-height", Text)
   | Accumulate -> Attribute ("accumulate", Text)
   | Additive -> Attribute ("additive", Text)

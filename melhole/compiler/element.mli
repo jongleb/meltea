@@ -12,7 +12,6 @@ type special =
 type handler = {
   label : string;  (** The JSX label, like [onClick]. *)
   event : string;  (** The DOM event, like [click]. *)
-  family : string;  (** The [ReactEvent] family of the prop. *)
   requirement : [ `Required | `Optional ];
   value : Ppxlib.expression;
 }
