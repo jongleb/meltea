@@ -127,7 +127,9 @@ Property-based tests, not scenarios:
 - `Html.memo` and `Html.map` behave as in Elm;
 - after any change of subscriptions, a hash change sends exactly the current ones' messages;
 - TodoMVC shows the todos, the count and the route after any user actions;
-- the shared template compiler and the keyed list algorithm have their own laws, 16 of them
+- keyed loops reuse a row exactly when its item and projection are unchanged, and patching always
+  shows what mounting from scratch shows, under random edits (swaps, moves, inserts, clears);
+- the shared template compiler and the keyed list algorithm have their own laws, 24 of them
   checked 2,000 times each.
 
 ```console

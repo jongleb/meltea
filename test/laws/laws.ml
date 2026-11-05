@@ -65,35 +65,74 @@ let simulate old next (plan : Reconcile.t) =
   walk (Array.length next - 1) None;
   !dom
 
-let reconcile_laws =
+let edited_input =
+  Gen.(
+    let distinct = map (fun count -> Array.init count (fun index -> string_of_int (index * 7 mod 41))) (int_bound 30) in
+    let edit keys =
+      let count = Array.length keys in
+      let at bound = if bound <= 0 then return 0 else int_bound (bound - 1) in
+      int_bound 8 >>= fun choice ->
+      at count >>= fun first ->
+      at count >>= fun second ->
+      match (choice, count) with
+      | _, 0 -> return [| "n" |]
+      | 0, _ ->
+          let next = Array.copy keys in
+          next.(0) <- keys.(count - 1);
+          next.(count - 1) <- keys.(0);
+          return next
+      | 1, _ ->
+          let next = Array.copy keys in
+          next.(first) <- keys.(second);
+          next.(second) <- keys.(first);
+          return next
+      | 2, _ -> return (Array.of_list (List.filteri (fun index _ -> index <> first) (Array.to_list keys)))
+      | 3, _ ->
+          return (Array.concat [ Array.sub keys 0 first; [| "n" ^ string_of_int first |]; Array.sub keys first (count - first) ])
+      | 4, _ ->
+          let low = min first second and high = max first second in
+          return (Array.mapi (fun index key -> if index >= low && index <= high then keys.(high - (index - low)) else key) keys)
+      | 5, _ ->
+          let moved = keys.(first) in
+          let rest = List.filteri (fun index _ -> index <> first) (Array.to_list keys) in
+          return (Array.of_list (List.filteri (fun index _ -> index < second) rest @ [ moved ] @ List.filteri (fun index _ -> index >= second) rest))
+      | 6, _ -> return [||]
+      | _, _ -> return (Array.map (fun key -> "r" ^ key) keys)
+    in
+    distinct >>= fun keys ->
+    int_range 1 3 >>= fun times ->
+    let rec apply remaining current = if remaining = 0 then return current else edit current >>= apply (remaining - 1) in
+    apply times keys >>= fun next -> return (keys, next))
+
+let reconcile_laws (kind, input) =
   [
-    Test.make ~count:2000 ~name:"Reconcile: one step per new entry" ~print:print_keys reconcile_input
+    Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "one step per new entry") ~print:print_keys input
       (fun (old, next) -> Array.length (Reconcile.plan ~old ~next).steps = Array.length next);
-    Test.make ~count:2000 ~name:"Reconcile: reused and dropped entries partition the old ones"
-      ~print:print_keys reconcile_input (fun (old, next) ->
+    Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "reused and dropped entries partition the old ones")
+      ~print:print_keys input (fun (old, next) ->
         let plan = Reconcile.plan ~old ~next in
         List.sort compare (List.map snd (reused plan) @ plan.dropped)
         = List.init (Array.length old) Fun.id);
-    Test.make ~count:2000 ~name:"Reconcile: a reused entry has the same key" ~print:print_keys
-      reconcile_input (fun (old, next) ->
+    Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "a reused entry has the same key") ~print:print_keys
+      input (fun (old, next) ->
         List.for_all
           (fun (j, i) -> String.equal old.(i) next.(j))
           (reused (Reconcile.plan ~old ~next)));
-    Test.make ~count:2000 ~name:"Reconcile: reuse is maximal, the sum over keys of min(old, new) counts"
-      ~print:print_keys reconcile_input (fun (old, next) ->
+    Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "reuse is maximal, the sum over keys of min(old, new) counts")
+      ~print:print_keys input (fun (old, next) ->
         let keys = List.sort_uniq compare (Array.to_list old @ Array.to_list next) in
         List.length (reused (Reconcile.plan ~old ~next))
         = List.fold_left (fun total key -> total + min (count key old) (count key next)) 0 keys);
-    Test.make ~count:2000 ~name:"Reconcile: kept entries appear in increasing old order" ~print:print_keys
-      reconcile_input (fun (old, next) ->
+    Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "kept entries appear in increasing old order") ~print:print_keys
+      input (fun (old, next) ->
         let kept =
           List.concat_map
             (fun (step : Reconcile.step) -> match step with Keep i -> [ i ] | Move _ | Create -> [])
             (Array.to_list (Reconcile.plan ~old ~next).steps)
         in
         kept = List.sort_uniq compare kept);
-    Test.make ~count:2000 ~name:"Reconcile: kept entries are a longest increasing subsequence (moves are minimal)"
-      ~print:print_keys reconcile_input (fun (old, next) ->
+    Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "kept entries are a longest increasing subsequence (moves are minimal)")
+      ~print:print_keys input (fun (old, next) ->
         let plan = Reconcile.plan ~old ~next in
         let kept =
           Array.fold_left
@@ -102,8 +141,8 @@ let reconcile_laws =
             0 plan.steps
         in
         kept = longest_increasing (List.map snd (reused plan)));
-    Test.make ~count:2000 ~name:"Reconcile: executing the plan right to left yields exactly the new sequence"
-      ~print:print_keys reconcile_input (fun (old, next) ->
+    Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "executing the plan right to left yields exactly the new sequence")
+      ~print:print_keys input (fun (old, next) ->
         let plan = Reconcile.plan ~old ~next in
         simulate old next plan
         = Array.to_list
@@ -111,8 +150,8 @@ let reconcile_laws =
                (fun j (step : Reconcile.step) ->
                  match step with Create -> `New j | Keep i | Move i -> `Old i)
                plan.steps));
-    Test.make ~count:2000 ~name:"Reconcile: an unchanged sequence keeps every entry in place"
-      ~print:Print.(array string) reconcile_keys (fun keys ->
+    Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "an unchanged sequence keeps every entry in place")
+      ~print:print_keys input (fun (keys, _) ->
         let plan = Reconcile.plan ~old:keys ~next:keys in
         plan.dropped = []
         && Array.for_all2
@@ -444,4 +483,4 @@ let dom_props_laws =
   ]
 
 let () =
-  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws @ markup_laws @ dom_props_laws))
+  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ dom_props_laws))
