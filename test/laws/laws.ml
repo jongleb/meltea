@@ -322,7 +322,8 @@ let positions holes =
     (fun (hole : int Markup.hole) ->
       match hole with
       | At_position (path, index, _, slot) -> [ (path, index, slot) ]
-      | On_element _ -> [])
+      | On_element (path, Sole_text, slot) -> [ (path, 0, slot) ]
+      | On_element (_, (Attr _ | Prop _ | Control _ | Handler _ | Ref | Style), _) -> [])
     holes
 
 let rec insert positions path node =
@@ -364,6 +365,10 @@ let markup_laws =
         List.for_all
           (fun (hole : int Markup.hole) ->
             match hole with
+            | On_element (path, Sole_text, _) -> (
+                match resolve root path with
+                | Some (Parsed_element (_, _, [])) -> true
+                | Some (Parsed_element (_, _, _ :: _) | Parsed_text _ | Parsed_comment | Parsed_slot _) | None -> false)
             | On_element (path, _, id) -> (
                 match resolve root path with
                 | Some (Parsed_element (_, statics, _)) ->
@@ -407,6 +412,10 @@ let markup_laws =
             List.for_all
               (fun (hole : int Markup.hole) ->
                 match hole with
+                | On_element (path, Sole_text, _) -> (
+                    match Option.bind (List.assoc_opt path reached) (resolve root) with
+                    | Some (Parsed_element (_, _, [])) -> true
+                    | Some (Parsed_element (_, _, _ :: _) | Parsed_text _ | Parsed_comment | Parsed_slot _) | None -> false)
                 | On_element (path, _, id) -> (
                     match Option.bind (List.assoc_opt path reached) (resolve root) with
                     | Some (Parsed_element (_, statics, _)) ->

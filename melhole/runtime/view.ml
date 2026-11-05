@@ -905,6 +905,14 @@ let put_text scope slot node value =
     Dom_api.set_data node value;
     Array.unsafe_set scope.deps slot (Input value))
 
+let put_sole_text scope slot element value =
+  let (Input last) = Array.unsafe_get scope.deps slot in
+  if not (Dom_api.same last value) then (
+    (match Dom_api.first_child element with
+    | Some node when Dom_api.node_type node = 3 -> Dom_api.set_data (Dom_api.unsafe_text node) value
+    | Some _ | None -> Dom_api.set_text_content (Dom_api.to_node element) value);
+    Array.unsafe_set scope.deps slot (Input value))
+
 let put_attr scope slot element name value =
   let (Input last) = Array.unsafe_get scope.deps slot in
   if not (Dom_api.same last value) then (

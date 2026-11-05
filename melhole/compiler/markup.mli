@@ -8,6 +8,7 @@ type site =
   | Handler of string  (** The DOM event name. *)
   | Ref
   | Style
+  | Sole_text  (** The element's only child, a dynamic text: written through the element, no anchor. *)
 
 (** What a child slot inserts. *)
 type slot = Text_slot | Child_slot

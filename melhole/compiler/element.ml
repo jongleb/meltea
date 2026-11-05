@@ -262,7 +262,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
       (fun index (hole : expression Markup.hole) ->
         let one creator value = ([ (hole_name index, creator) ], value) in
         match hole with
-        | On_element (indices, Attr _, value) -> one (at indices) value
+        | On_element (indices, (Attr _ | Sole_text), value) -> one (at indices) value
         | On_element (indices, Handler event, value) ->
             ( [
                 (hole_name index, at indices);
@@ -310,7 +310,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
       (fun (hole : expression Markup.hole) ->
         match hole with
         | On_element (_, Ref, _) -> Free.Volatile
-        | On_element (_, (Attr _ | Prop _ | Control _ | Style | Handler _), value)
+        | On_element (_, (Attr _ | Prop _ | Control _ | Style | Handler _ | Sole_text), value)
         | At_position (_, _, _, value) ->
             match Free.of_expression value with
             | Free.Reads names ->
@@ -335,7 +335,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
          (List.fold_left
             (fun (next, found) (index, (hole : expression Markup.hole)) ->
               match hole with
-              | On_element (_, Attr _, _) | At_position (_, _, Text_slot, _) -> (next + 1, (index, next) :: found)
+              | On_element (_, (Attr _ | Sole_text), _) | At_position (_, _, Text_slot, _) -> (next + 1, (index, next) :: found)
               | On_element (_, (Prop _ | Control _ | Handler _ | Ref | Style), _) | At_position (_, _, Child_slot, _) ->
                   (next, found))
             (guard_slots, [])
@@ -365,6 +365,8 @@ let lowercase frontend ~loc ~attributes tag arguments =
                   [%e value]]
           | At_position (_, _, Text_slot, value) ->
               [%expr Melhole.View.put_text __melhole_scope [%e value_slot index] [%e hole_value] [%e value]]
+          | On_element (_, Sole_text, value) ->
+              [%expr Melhole.View.put_sole_text __melhole_scope [%e value_slot index] [%e hole_value] [%e value]]
           | On_element (_, Handler _, value) -> (
               let key = evar ~loc (key_name index) in
               match (frontend.handlers, guard) with

@@ -137,6 +137,7 @@ val handler_hole : scope -> Dom.element -> string -> Hole.handler
 val set_handler : Hole.handler -> (Dom.event -> unit) -> unit
 val text_at : Template.position -> Dom.text
 val put_text : scope -> int -> Dom.text -> string -> unit
+val put_sole_text : scope -> int -> Dom.element -> string -> unit
 val put_attr : scope -> int -> Dom.element -> string -> string option -> unit
 val listen : scope -> Dom.element -> string -> string
 val put_handler : Dom.element -> string -> (Dom.event -> unit) -> unit
