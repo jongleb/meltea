@@ -161,7 +161,7 @@ let mapper =
                               | false -> None)))
               | _ -> []
             in
-            Hoist.structure self#structure_item [ item ] @ companions)
+            Hoist.structure (fun item -> self#structure_item (Remember.structure_item item)) [ item ] @ companions)
           items
       in
       tracked <- known;

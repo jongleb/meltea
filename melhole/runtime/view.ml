@@ -209,6 +209,19 @@ let compare_inputs old next =
   in
   match count = Array.length next with true -> scan 0 | false -> Changed
 
+type 'value memory = { mutable seen : input array; mutable kept : 'value option }
+
+let memory () = { seen = [||]; kept = None }
+
+let remember memory inputs compute =
+  match (memory.kept, compare_inputs memory.seen inputs) with
+  | Some kept, Unchanged -> kept
+  | Some _, Changed | None, (Changed | Unchanged) ->
+      let value = compute () in
+      memory.seen <- inputs;
+      memory.kept <- Some value;
+      value
+
 let group state items =
   {
     state;

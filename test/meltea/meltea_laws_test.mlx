@@ -714,3 +714,51 @@ let () =
            expect (made, agreed) |. to_equal (draws, true);
            Js.Promise.resolve ()))
         [%mel.obj { numRuns = 100 }]))
+
+let evaluations = ref 0
+
+let counted items =
+  incr evaluations;
+  items
+
+module Counted = struct
+  let view model =
+    let shown =
+      List.filter
+        (fun item -> match model.filter with All -> true | Active -> not item.finished | Completed -> item.finished)
+        (counted model.items)
+    in
+    <section>
+      <input value=model.draft onInput=(fun text -> Type text) />
+      <ul>(Html.list (List.map row shown))</ul>
+    </section>
+end
+
+let () =
+  describe "Meltea remembered values" (fun () ->
+    test "a derived let in the view is computed again exactly when what it reads changed, and the page is the view" (fun () ->
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           let steps = steps (tape values) in
+           let root = create_element document "div" and fresh = create_element document "div" in
+           evaluations := 0;
+           let program = Program.sandbox ~init ~update ~view:Counted.view root in
+           let mounted_at = !evaluations in
+           let expected = ref 0 and last = ref (init.items, init.filter) and model = ref init in
+           List.iter
+             (fun step ->
+               match step with
+               | Send message -> model := update message !model
+               | Flush ->
+                   let items, filter = !last in
+                   if not (items == !model.items && filter == !model.filter) then incr expected;
+                   last := (!model.items, !model.filter))
+             (steps @ [ Flush ]);
+           run program steps;
+           let computed = !evaluations - mounted_at in
+           let mounted = Program.sandbox ~init:(final steps) ~update ~view:Counted.view fresh in
+           let same = snapshot root = snapshot fresh in
+           Program.stop program;
+           Program.stop mounted;
+           expect (computed, same) |. to_equal (!expected, true)))
+        [%mel.obj { numRuns = 300 }]))

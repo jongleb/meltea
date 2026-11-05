@@ -186,3 +186,11 @@ val mount :
 val mount_over : child -> parent:'a Dom.node_like -> mounted
 val patch : mounted -> child -> unit
 val unmount : mounted -> unit
+
+(** The last value a pure expression gave and the inputs it gave it for. *)
+type 'value memory
+
+val memory : unit -> 'value memory
+
+(** The remembered value when every input is the one it was computed from ([===]), else a new one. *)
+val remember : 'value memory -> input array -> (unit -> 'value) -> 'value

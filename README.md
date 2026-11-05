@@ -49,6 +49,14 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   immutable values make this exact: an unchanged reference is an unchanged value.
 - **Fields.** The compiler reads `update` and `view`: which model fields each message can change,
   which fields the view reads. A message that changes nothing the view reads does not call it.
+- **Remembered values.** `let shown = List.filter … model.items` at the top of a view is computed
+  again only when `model.items` or another input changed; otherwise it is the same list, and the
+  holes that read it are skipped, so typing in a field does not check the list's rows.
+
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/remember-dark.svg">
+    <img src="assets/remember.svg" alt="Type m changes only draft; let shown = List.filter … model.items is remembered by model.filter and model.items, so the old list comes back and the list hole is skipped" width="100%">
+  </picture>
 - **Fanout.** The compiler follows each frequent event (typing, keys, pointer moves, scroll) to the
   message it sends, the fields that message's branch writes and the lists that read them. When
   typing in a field would make a list check all its rows on every keystroke, it says so at the
