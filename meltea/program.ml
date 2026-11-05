@@ -57,6 +57,8 @@ let start course ~tracking ~view initial root =
 
 let everything = { changes = (fun _ -> -1); reads = -1 }
 
+let mutable_read = ()
+
 let track ~update ~changes ~view ~reads =
   match (changes, reads) with
   | Changes found, Reads read when same found.analysed update && same read.analysed view ->

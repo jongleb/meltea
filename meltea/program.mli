@@ -13,6 +13,11 @@ type reads = Reads : { analysed : 'view; fields : int } -> reads | Unread
 (** What the compiler found in [update] and [view], checked to describe the functions in use. *)
 type 'msg tracking
 
+val mutable_read : unit
+[@@alert
+  mutable_model
+    "this model field can change in place, and Meltea redraws only when the model value changes: keep the model immutable"]
+
 val track : update:'update -> changes:'msg changes -> view:'view -> reads:reads -> 'msg tracking
 
 val sandbox :
