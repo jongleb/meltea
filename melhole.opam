@@ -2,19 +2,21 @@
 opam-version: "2.0"
 synopsis:
   "Templates with holes for Melange: the runtime and the compiler shared by Melact and Meltea"
-maintainer: ["Gleb"]
-authors: ["Gleb"]
+description:
+  "melhole turns a view known at build time into a DOM template with holes and per-template update code, guarded by === on the values each hole reads. It is the runtime and the compiler under Melact and Meltea, and has a server writer that renders the same views to HTML natively."
+maintainer: ["Gleb <jongleber@gmail.com>"]
+authors: ["Gleb <jongleber@gmail.com>"]
 license: "MIT"
-homepage: "https://github.com/jongleb/melact"
+homepage: "https://jongleb.github.io/melact-meltea-sites/melact/"
+doc: "https://github.com/jongleb/melact#readme"
 bug-reports: "https://github.com/jongleb/melact/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.16" & >= "3.16"}
-  "melange" {>= "5.1"}
-  "ppxlib" {>= "0.34"}
+  "melange" {>= "7.0.0"}
+  "ppxlib" {>= "0.39.0"}
   "ppx_deriving_variant_string"
   "ppx_enumerate"
-  "qcheck-core" {with-test}
   "odoc" {with-doc}
 ]
 build: [

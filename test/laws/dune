@@ -3,4 +3,5 @@
 
 (test
  (name laws)
+ (package meltea-ppx)
  (libraries qcheck-core qcheck-core.runner ppxlib melhole.compiler meltea-ppx))

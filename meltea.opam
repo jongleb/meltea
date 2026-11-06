@@ -2,16 +2,20 @@
 opam-version: "2.0"
 synopsis:
   "The Elm architecture for Melange: pure functions, mlx views, compiled templates"
-maintainer: ["Gleb"]
-authors: ["Gleb"]
+description:
+  "Meltea is the Elm architecture in OCaml: a model, messages, a pure update and a pure view written in mlx, compiled by meltea-ppx to DOM templates that re-render only what a message changed."
+maintainer: ["Gleb <jongleber@gmail.com>"]
+authors: ["Gleb <jongleber@gmail.com>"]
 license: "MIT"
-homepage: "https://github.com/jongleb/melact"
+homepage: "https://jongleb.github.io/melact-meltea-sites/melact/"
+doc: "https://github.com/jongleb/melact#readme"
 bug-reports: "https://github.com/jongleb/melact/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.16" & >= "3.16"}
-  "melange" {>= "5.1"}
-  "melhole"
+  "melange" {>= "7.0.0"}
+  "melhole" {= version}
+  "meltea-ppx" {with-test & = version}
   "mlx" {with-test}
   "jsonkit-melange" {with-test}
   "odoc" {with-doc}

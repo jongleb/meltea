@@ -231,8 +231,11 @@ their OCaml types; a typo is a compile error that names the element.
  (preprocess (pps melange.ppx meltea-ppx)))
 ```
 
-and `(dialect (name mlx) …)` in `dune-project` for `.mlx` files. Until the opam release, pin it:
-`opam pin add melhole meltea meltea-ppx https://github.com/jongleb/meltea.git`.
+and `(dialect (name mlx) …)` in `dune-project` for `.mlx` files. Meltea needs OCaml ≥ 5.4,
+Melange ≥ 7.0 and dune ≥ 3.16; install it with `opam install meltea meltea-ppx`, or, until the
+packages are in opam-repository, pin them from the release tag:
+`opam pin add melhole.0.1.0 git+https://github.com/jongleb/melact#0.1.0`, and the same for
+`meltea-ppx.0.1.0` and `meltea.0.1.0`.
 
 ## Tested by laws
 
