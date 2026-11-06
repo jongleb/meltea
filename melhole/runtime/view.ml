@@ -946,6 +946,13 @@ let set_prop (hole : Hole.prop) value =
         | false -> ()));
     hole.value <- Input value)
 
+let restores = ref []
+
+let restore_controlled () =
+  let pending = !restores in
+  restores := [];
+  List.iter (fun restore -> restore ()) (List.rev pending)
+
 let controlled_hole element name =
   let hole : Hole.prop =
     {
@@ -960,11 +967,12 @@ let controlled_hole element name =
     }
   in
   let restore _ =
-    Dom_api.queue_microtask (fun () ->
-        Dom_api.queue_microtask (fun () ->
-            let (Input value) = hole.value in
-            if not (Dom_api.same (Dom_api.property element name) value) then
-              Dom_api.set_property element name value))
+    restores :=
+      (fun () ->
+        let (Input value) = hole.value in
+        if not (Dom_api.same (Dom_api.property element name) value) then Dom_api.set_property element name value)
+      :: !restores;
+    Dom_api.queue_microtask (fun () -> Dom_api.queue_microtask restore_controlled)
   in
   Dom_api.add_listener element "input" restore;
   Dom_api.add_listener element "change" restore;

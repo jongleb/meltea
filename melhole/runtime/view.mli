@@ -144,6 +144,10 @@ val attr_hole : Dom.element -> string -> Hole.attr
 val set_attr : Hole.attr -> string option -> unit
 val prop_hole : Dom.element -> string -> Hole.prop
 val set_prop : Hole.prop -> 'a -> unit
+(** Puts every controlled value back that an input or change event left different from the state;
+    it runs by itself after the next render, and [act] runs it at once. *)
+val restore_controlled : unit -> unit
+
 val controlled_hole : Dom.element -> string -> Hole.prop
 val style_hole : Dom.element -> Hole.style
 val set_style : Hole.style -> (string * string) list -> unit
