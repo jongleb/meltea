@@ -23,7 +23,7 @@ let reused (plan : Reconcile.t) =
     (Array.to_list
        (Array.mapi
           (fun j (step : Reconcile.step) ->
-            match step with Keep i | Move i -> [ (j, i) ] | Create -> [])
+            match Reconcile.view step with Keep i | Move i -> [ (j, i) ] | Create -> [])
           plan.steps))
 
 let count key keys =
@@ -44,7 +44,7 @@ let simulate old next (plan : Reconcile.t) =
   let dom =
     ref
       (List.filter_map
-         (fun i -> if List.mem i plan.dropped then None else Some (`Old i))
+         (fun i -> if Array.mem i plan.dropped then None else Some (`Old i))
          (List.init (Array.length old) Fun.id))
   in
   let place node anchor =
@@ -57,8 +57,8 @@ let simulate old next (plan : Reconcile.t) =
   in
   let rec walk j anchor =
     if j >= 0 then begin
-      let node = match plan.steps.(j) with Create -> `New j | Keep i | Move i -> `Old i in
-      (match plan.steps.(j) with Create | Move _ -> place node anchor | Keep _ -> ());
+      let node = match Reconcile.view plan.steps.(j) with Create -> `New j | Keep i | Move i -> `Old i in
+      (match Reconcile.view plan.steps.(j) with Create | Move _ -> place node anchor | Keep _ -> ());
       walk (j - 1) (Some node)
     end
   in
@@ -111,7 +111,7 @@ let reconcile_laws (kind, input) =
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "reused and dropped entries partition the old ones")
       ~print:print_keys input (fun (old, next) ->
         let plan = Reconcile.plan ~old ~next in
-        List.sort compare (List.map snd (reused plan) @ plan.dropped)
+        List.sort compare (List.map snd (reused plan) @ Array.to_list plan.dropped)
         = List.init (Array.length old) Fun.id);
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "a reused entry has the same key") ~print:print_keys
       input (fun (old, next) ->
@@ -127,7 +127,7 @@ let reconcile_laws (kind, input) =
       input (fun (old, next) ->
         let kept =
           List.concat_map
-            (fun (step : Reconcile.step) -> match step with Keep i -> [ i ] | Move _ | Create -> [])
+            (fun (step : Reconcile.step) -> match Reconcile.view step with Keep i -> [ i ] | Move _ | Create -> [])
             (Array.to_list (Reconcile.plan ~old ~next).steps)
         in
         kept = List.sort_uniq compare kept);
@@ -137,7 +137,7 @@ let reconcile_laws (kind, input) =
         let kept =
           Array.fold_left
             (fun total (step : Reconcile.step) ->
-              match step with Keep _ -> total + 1 | Move _ | Create -> total)
+              match Reconcile.view step with Keep _ -> total + 1 | Move _ | Create -> total)
             0 plan.steps
         in
         kept = longest_increasing (List.map snd (reused plan)));
@@ -148,14 +148,14 @@ let reconcile_laws (kind, input) =
         = Array.to_list
             (Array.mapi
                (fun j (step : Reconcile.step) ->
-                 match step with Create -> `New j | Keep i | Move i -> `Old i)
+                 match Reconcile.view step with Create -> `New j | Keep i | Move i -> `Old i)
                plan.steps));
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "an unchanged sequence keeps every entry in place")
       ~print:print_keys input (fun (keys, _) ->
         let plan = Reconcile.plan ~old:keys ~next:keys in
-        plan.dropped = []
+        plan.dropped = [||]
         && Array.for_all2
-             (fun (step : Reconcile.step) i -> step = Keep i)
+             (fun (step : Reconcile.step) i -> Reconcile.view step = Keep i)
              plan.steps
              (Array.init (Array.length keys) Fun.id));
   ]

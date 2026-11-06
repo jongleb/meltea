@@ -15,7 +15,7 @@ type hole =
   | HClass of string list  (** The classes that are on. *)
   | HStyle of (string * string) list  (** camelCase property, value. *)
   | HHandler of (Dom.event -> unit)  (** Replaced on every patch, never compared. *)
-  | HRef of (Dom.element -> unit)  (** Called when mounted or replaced. *)
+  | HRef of (Dom.element Js.nullable -> unit)  (** Called with the element when mounted, with null when it goes; a new one replaces the old, called with null first. *)
   | HChild of child
 
 val text : string -> child
@@ -23,8 +23,20 @@ val empty : child
 val list : child list -> child
 val keyed : (string * child) list -> child
 val with_key : string -> child -> child
+(** Whether a compiled loop's rows are drawn from the item alone, or from the item and its index. *)
+type numbering = Items | Numbered
+
+(** A compiled loop: [project item index out at] writes the [pieces] values of a row's rendering that read
+    [outer] into [out] from [at], so that a change of [outer] re-renders only the rows they differ in
+    and allocates nothing per row; a [Numbered] row is drawn again when its index changes. *)
 val each :
-  'item array -> ('item -> child[@u]) -> ('item -> input array[@u]) -> input array -> child
+  numbering ->
+  'item array ->
+  ('item -> int -> child[@u]) ->
+  ('item -> int -> input array -> int -> unit[@u]) ->
+  int ->
+  input array ->
+  child
 
 (** A mounted compiled template: the values its refresh last read and what it holds. *)
 type scope
@@ -40,7 +52,8 @@ val rows :
   int ->
   (scope -> 'holes -> 'item -> unit[@u]) ->
   ('item -> string[@u]) ->
-  ('item -> input array[@u]) ->
+  ('item -> int -> input array -> int -> unit[@u]) ->
+  int ->
   input array ->
   child
 val tpl_instance : Template.t -> hole array -> child
@@ -165,7 +178,10 @@ val text_at : Template.position -> Dom.text
 val put_text : scope -> int -> Dom.text -> string -> unit
 val put_sole_text : scope -> int -> Dom.element -> string -> unit
 val put_attr : scope -> int -> Dom.element -> string -> string option -> unit
-val listen : scope -> Dom.element -> string -> string
+val listen : scope -> Dom.element -> string -> unit
+
+(** The property a delegated handler for an event is kept in, the same for every element. *)
+val event_key : string -> string
 val put_handler : Dom.element -> string -> (Dom.event -> unit) -> unit
 
 (** A handler site compiled once, shared by every element that uses it. *)
@@ -174,7 +190,9 @@ type ('data, 'dispatch) link
 val link : ('data -> 'dispatch -> Dom.event -> unit[@u]) -> ('data, 'dispatch) link
 val put_linked : Dom.element -> string -> ('data, 'dispatch) link -> 'dispatch -> 'data -> unit
 val reference_hole : scope -> Dom.element -> Hole.reference
-val set_reference : Hole.reference -> (Dom.element -> unit) -> unit
+(** [set_reference hole identity callback]: a ref whose identity is not the one held replaces it, the
+    old one called with null and the new one with the element, as React compares its refs. *)
+val set_reference : Hole.reference -> 'identity -> (Dom.element Js.nullable -> unit) -> unit
 val content_hole : scope -> Template.position -> Hole.content
 val set_content : Hole.content -> child -> unit
 

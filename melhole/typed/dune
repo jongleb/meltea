@@ -1,0 +1,6 @@
+(library
+ (name melhole_typed)
+ (public_name melhole.typed)
+ (libraries ppxlib compiler-libs.common)
+ (preprocess
+  (pps ppxlib.metaquot)))

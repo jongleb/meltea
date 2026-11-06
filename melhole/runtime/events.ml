@@ -84,7 +84,6 @@ external early : (unit -> (Dom.event * string Js.undefined * bool Js.undefined) 
   = "__melhole_early"
 [@@mel.scope "globalThis"]
 
-external event_type : Dom.event -> string = "type" [@@mel.get]
 external contains : Dom.node -> Dom.node -> bool = "contains" [@@mel.send]
 external value : Dom.node -> string Js.undefined = "value" [@@mel.get]
 external checked : Dom.node -> bool Js.undefined = "checked" [@@mel.get]
@@ -109,14 +108,14 @@ let replay root =
         (fun (native, early_value, early_checked) ->
           Option.iter
             (fun target ->
-              match (contains root target, List.assoc_opt (event_type native) !deliveries) with
+              match (contains root target, List.assoc_opt (Dom_api.event_type native) !deliveries) with
               | false, _ -> ()
               | true, found -> (
                   restore target early_value early_checked;
                   match found with
                   | Some deliver -> deliver native
                   | None ->
-                      let key = key_of (event_type native) in
+                      let key = key_of (Dom_api.event_type native) in
                       let rec bubble node =
                         Option.iter
                           (fun handle ->
@@ -129,7 +128,7 @@ let replay root =
                       in
                       bubble target;
                       Dom_api.release_current_target native);
-                  match event_type native with
+                  match Dom_api.event_type native with
                   | "input" | "change" -> Option.iter (fun restore -> restore native) (Dom_api.handler target controlled)
                   | _ -> ())
             (Dom_api.target native))

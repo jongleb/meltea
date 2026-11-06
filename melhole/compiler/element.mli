@@ -34,7 +34,7 @@ type frontend = {
   style : Ppxlib.location -> [ `Required | `Optional ] -> Ppxlib.expression -> Ppxlib.expression;
       (** The hole value of a [style] prop. *)
   reference : Ppxlib.location -> [ `Required | `Optional ] -> Ppxlib.expression -> Ppxlib.expression;
-      (** The hole value of a [ref] prop. *)
+      (** The hole value of a [ref] prop: the callback, or a pair of what tells the ref from another and the callback. *)
   classify : Ppxlib.expression -> special option;
   extra : string -> Dom_props.kind option;  (** Props the front end adds to reason-react's. *)
   each : Ppxlib.location -> Ppxlib.expression -> Ppxlib.expression option;
@@ -48,6 +48,9 @@ val output : output ref
 val without_jsx : Ppxlib.attributes -> Ppxlib.attributes option
 val list_items : Ppxlib.expression -> Ppxlib.expression list option
 
+(** Whether a loop's row function takes the item, or the index and then the item. *)
+type numbering = Items | Numbered
+
 val loop :
   frontend ->
   loc:Ppxlib.location ->
@@ -55,6 +58,7 @@ val loop :
   view:(Ppxlib.expression -> bool) ->
   stable:Ppxlib.expression list ->
   render:(Ppxlib.expression -> Ppxlib.expression) ->
+  numbering:numbering ->
   Ppxlib.expression ->
   Ppxlib.expression ->
   Ppxlib.expression option

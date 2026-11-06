@@ -375,7 +375,36 @@ let lowercase frontend ~loc ~attributes tag arguments =
             one [%expr Melhole.View.content_hole [%e scope] [%e position indices index_in]] value)
       holes
   in
-  let creators = List.concat_map fst made_holes in
+  let creators, same, effects, keys =
+    let kept, same, effects, keys =
+      List.fold_left
+        (fun (kept, same, effects, keys) (named, creator) ->
+          match creator with
+          | [%expr Melhole.View.listen [%e? scope] [%e? element] [%e? event]] ->
+              ( kept,
+                same,
+                [%expr Melhole.View.listen [%e scope] [%e element] [%e event]] :: effects,
+                (named, Hoist.hoist ~loc "event" [%expr Melhole.View.event_key [%e event]]) :: keys )
+          | [%expr Melhole.Template.element [%e? _]] -> (
+              let printed = Pprintast.string_of_expression creator in
+              match
+                List.find_opt (fun (_, other) -> String.equal (Pprintast.string_of_expression other) printed) kept
+              with
+              | Some (original, _) -> (kept, (named, original) :: same, effects, keys)
+              | None -> ((named, creator) :: kept, same, effects, keys))
+          | _ -> ((named, creator) :: kept, same, effects, keys))
+        ([], [], [], [])
+        (List.concat_map fst made_holes)
+    in
+    (List.rev kept, List.rev same, List.rev effects, List.rev keys)
+  in
+  let effected body = List.fold_right (fun registered body -> [%expr [%e registered]; [%e body]]) effects body in
+  let bound body =
+    List.fold_right
+      (fun (named, value) body -> [%expr let [%p pvar ~loc named] = [%e value] in [%e body]])
+      (List.map (fun (named, original) -> (named, evar ~loc original)) same @ keys)
+      body
+  in
   let values = List.map snd made_holes in
   let tuple items = match items with [ single ] -> single | _ -> pexp_tuple ~loc items in
   let made =
@@ -387,7 +416,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
           | Next_of previous -> [%expr Melhole.Template.next [%e node previous]]
         in
         [%expr let [%p pvar ~loc (name indices)] = [%e reach] in [%e body]])
-      walk (tuple (List.map snd creators))
+      walk (effected (tuple (List.map snd creators)))
   in
   let markup =
     match element.tag with
@@ -489,7 +518,12 @@ let lowercase frontend ~loc ~attributes tag arguments =
                   [%expr Melhole.View.put_linked [%e hole_value] [%e key] [%e site] [%e evar ~loc dispatch] [%e carried]]
               | Linked _, Free.Volatile | Closures, _ -> [%expr Melhole.View.put_handler [%e hole_value] [%e key] [%e value]])
           | On_element (_, (Prop _ | Control _), value) -> [%expr Melhole.View.set_prop [%e hole_value] [%e value]]
-          | On_element (_, Ref, value) -> [%expr Melhole.View.set_reference [%e hole_value] [%e value]]
+          | On_element (_, Ref, { pexp_desc = Pexp_tuple [ identity; callback ]; _ }) ->
+              [%expr Melhole.View.set_reference [%e hole_value] [%e identity] [%e callback]]
+          | On_element (_, Ref, value) ->
+              [%expr
+                let __melhole_reference = [%e value] in
+                Melhole.View.set_reference [%e hole_value] __melhole_reference __melhole_reference]
           | On_element (_, Style, value) -> [%expr Melhole.View.set_style [%e hole_value] [%e value]]
           | At_position (_, _, Child_slot, value) -> [%expr Melhole.View.set_content [%e hole_value] [%e value]]
         in
@@ -565,7 +599,8 @@ let lowercase frontend ~loc ~attributes tag arguments =
           find 0 holes
         in
         let finished =
-          tuple (List.map (fun (named, creator) -> match is_slot named with true -> evar ~loc named | false -> creator) creators)
+          effected
+            (tuple (List.map (fun (named, creator) -> match is_slot named with true -> evar ~loc named | false -> creator) creators))
         in
         let adopting =
           List.fold_right
@@ -649,7 +684,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
           | [ single ] -> single
           | patterns -> ppat_tuple ~loc patterns
         in
-        let refresh = uncurried [%expr fun __melhole_scope [%p holes] -> [%e body]] in
+        let refresh = uncurried [%expr fun __melhole_scope [%p holes] -> [%e bound body]] in
         match role with
         | `Row key -> [%expr Melhole.View.row [%e template] [%e eint ~loc slots] [%e refresh] ([%e key] : string)]
         | `Child -> frontend.wrap loc [%expr Melhole.View.compiled [%e template] [%e eint ~loc slots] [%e refresh]]
@@ -663,7 +698,9 @@ let lowercase frontend ~loc ~attributes tag arguments =
             [%expr Melhole.View.with_key ([%e key] : string) [%e frontend.unwrap loc instance]])
         key
 
-let loop frontend ~loc ~definitions ~view ~stable ~render row items =
+type numbering = Items | Numbered
+
+let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
   match (!output, Free.closure ~definitions ~locals:frontend.locals row) with
   | Server, _ -> None
   | (Client_only | Hydratable), closure ->
@@ -683,30 +720,62 @@ let loop frontend ~loc ~definitions ~view ~stable ~render row items =
           | Pexp_ident { txt = Lident name; _ } -> List.assoc_opt name definitions
           | _ -> Some row)
           (fun lambda ->
-            match lambda.pexp_desc with
-            | Pexp_function
-                ([ { pparam_desc = Pparam_val (Nolabel, None, pattern); _ } ], None, Pfunction_body body)
-              -> (
+            let bound =
+              match (numbering, lambda.pexp_desc) with
+              | Items, Pexp_function ([ { pparam_desc = Pparam_val (Nolabel, None, pattern); _ } ], None, Pfunction_body body)
+                ->
+                  Some ((fun inner -> [%expr let [%p pattern] = __melhole_item in [%e inner]]), body)
+              | ( Numbered,
+                  Pexp_function
+                    ( [
+                        { pparam_desc = Pparam_val (Nolabel, None, position); _ };
+                        { pparam_desc = Pparam_val (Nolabel, None, pattern); _ };
+                      ],
+                      None,
+                      Pfunction_body body ) ) ->
+                  Some
+                    ( (fun inner -> [%expr let [%p position] = __melhole_index in let [%p pattern] = __melhole_item in [%e inner]]),
+                      body )
+              | (Items | Numbered), _ -> None
+            in
+            Option.bind bound (fun (bind, body) ->
                 match Free.of_expression lambda with
                 | Volatile -> None
                 | Reads read ->
                     Option.map
-                      (fun leaves -> (pattern, leaves))
+                      (fun leaves -> (bind, leaves))
                       (Free.leaves
                          ~outer:(List.filter (fun name -> List.mem name frontend.locals) read)
-                         ~view body))
-            | _ -> None)
+                         ~view body)))
+      in
+      let written values =
+        List.fold_right
+          (fun (index, value) rest ->
+            [%expr
+              Stdlib.Array.unsafe_set __melhole_out (__melhole_at + [%e eint ~loc index]) (Melhole.View.Input [%e value]);
+              [%e rest]])
+          (List.mapi (fun index value -> (index, value)) (stable @ values))
+          [%expr ()]
+      in
+      let pieces =
+        eint ~loc
+          (List.length stable
+          + Option.fold ~none:(List.length names) ~some:(fun (_, leaves) -> List.length leaves) split)
       in
       let project =
-        Option.fold
-          ~none:[%expr fun _ -> [%e inputs (List.map (fun name -> evar ~loc name) names)]]
-          ~some:(fun (pattern, leaves) ->
-            [%expr
-              fun __melhole_item ->
-                (let [%p pattern] = __melhole_item in
-                 [%e inputs leaves])
-                [@ocaml.warning "-26-27"]])
-          split
+        pexp_record ~loc
+          [
+            ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I4"); loc },
+              Option.fold
+                ~none:[%expr fun _ _ __melhole_out __melhole_at -> [%e written (List.map (fun name -> evar ~loc name) names)]]
+                ~some:(fun (bind, leaves) ->
+                  [%expr
+                    fun __melhole_item __melhole_index __melhole_out __melhole_at ->
+                      [%e bind (written leaves)]
+                      [@ocaml.warning "-26-27"]])
+                split );
+          ]
+          None
       in
       let outer = inputs (List.map (fun name -> evar ~loc name) names) in
       let rec marked body =
@@ -726,9 +795,10 @@ let loop frontend ~loc ~definitions ~view ~stable ~render row items =
       in
       let compiled_rows =
         Option.bind
-          (match row.pexp_desc with
-          | Pexp_ident { txt = Lident name; _ } -> List.assoc_opt name definitions
-          | _ -> Some row)
+          (match (numbering, row.pexp_desc) with
+          | Numbered, _ -> None
+          | Items, Pexp_ident { txt = Lident name; _ } -> List.assoc_opt name definitions
+          | Items, _ -> Some row)
           (fun lambda ->
             match lambda.pexp_desc with
             | Pexp_function (([ { pparam_desc = Pparam_val (Nolabel, None, _); _ } ] as parameters), None, Pfunction_body body)
@@ -781,7 +851,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render row items =
                           [%expr
                             Melhole.View.rows [%e items] [%e template] [%e slots] [%e refresh]
                               [%e uncurried [%expr fun __melhole_item -> [%e given key]]]
-                              [%e uncurried project] [%e outer]]
+                              [%e project] [%e pieces] [%e outer]]
                         in
                         match row.pexp_desc with
                         | Pexp_ident _ -> [%expr let _ = [%e row] in [%e loop]]
@@ -794,9 +864,23 @@ let loop frontend ~loc ~definitions ~view ~stable ~render row items =
       | None ->
           Some
             [%expr
-              Melhole.View.each [%e items]
-                [%e uncurried [%expr fun __melhole_item -> [%e render [%expr [%e frontend.map row] __melhole_item]]]]
-                [%e uncurried project] [%e outer]]
+              Melhole.View.each
+                [%e match numbering with Items -> [%expr Melhole.View.Items] | Numbered -> [%expr Melhole.View.Numbered]]
+                [%e items]
+                [%e
+                  pexp_record ~loc
+                    [
+                      ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I2"); loc },
+                        match numbering with
+                        | Items ->
+                            [%expr fun __melhole_item _ -> [%e render [%expr [%e frontend.map row] __melhole_item]]]
+                        | Numbered ->
+                            [%expr
+                              fun __melhole_item __melhole_index ->
+                                [%e render [%expr [%e frontend.map row] __melhole_index __melhole_item]]] );
+                    ]
+                    None]
+                [%e project] [%e pieces] [%e outer]]
 
 let fragment frontend ~loc items =
   frontend.wrap loc

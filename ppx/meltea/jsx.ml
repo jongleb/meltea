@@ -105,7 +105,7 @@ let mapper =
                     | _ -> false)
                   ~stable:[ [%expr __melhole_dispatch] ]
                   ~render:(fun view -> [%expr Html.render [%e view] __melhole_dispatch])
-                  row
+                  ~numbering:Element.Items row
                   [%expr Stdlib.Array.of_list [%e self#expression items]]
             | _ -> None
             in

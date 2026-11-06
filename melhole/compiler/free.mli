@@ -6,6 +6,10 @@ type t =
 
 val of_expression : Ppxlib.expression -> t
 
+(** What a value captures: like [of_expression], but the body of a function in it is read as when
+    the function is called, so that what the body reads from mutable state is not a capture. *)
+val captured : Ppxlib.expression -> t
+
 val closure :
   definitions:(string * Ppxlib.expression) list -> locals:string list -> Ppxlib.expression -> t
 val bound : Ppxlib.pattern -> string list

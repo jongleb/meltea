@@ -1,19 +1,31 @@
-type step = Keep of int | Move of int | Create
-type t = { steps : step array; dropped : int list }
+type step = int
+
+type view = Keep of int | Move of int | Create
+
+let create = -1
+let keep i = 2 * i
+let move i = (2 * i) + 1
+let kept step = match step >= 0 && step land 1 = 0 with true -> Some (step / 2) | false -> None
+let moved step = match step >= 0 && step land 1 = 1 with true -> Some (step / 2) | false -> None
+
+let view step =
+  match (kept step, moved step) with Some i, _ -> Keep i | _, Some i -> Move i | None, None -> Create
+
+type t = { steps : step array; dropped : int array }
 
 let plan ~old ~next =
   let old_length = Array.length old and next_length = Array.length next in
-  let steps = Array.make next_length Create in
+  let steps = Array.make next_length create in
   let same i j = String.equal (Array.unsafe_get old i) (Array.unsafe_get next j) in
   let rec narrow old_start old_stop next_start next_stop =
     match (old_start < old_stop && next_start < next_stop) with
     | false -> (old_start, old_stop, next_start, next_stop)
     | true ->
         if same old_start next_start then (
-          Array.unsafe_set steps next_start (Keep old_start);
+          Array.unsafe_set steps next_start (keep old_start);
           narrow (old_start + 1) old_stop (next_start + 1) next_stop)
         else if same (old_stop - 1) (next_stop - 1) then (
-          Array.unsafe_set steps (next_stop - 1) (Keep (old_stop - 1));
+          Array.unsafe_set steps (next_stop - 1) (keep (old_stop - 1));
           narrow old_start (old_stop - 1) next_start (next_stop - 1))
         else if
           old_stop - old_start >= 3
@@ -22,19 +34,20 @@ let plan ~old ~next =
           && same (old_stop - 1) next_start
           && same (old_start + 1) (next_start + 1)
         then (
-          Array.unsafe_set steps next_start (Move (old_stop - 1));
-          Array.unsafe_set steps (next_stop - 1) (Move old_start);
+          Array.unsafe_set steps next_start (move (old_stop - 1));
+          Array.unsafe_set steps (next_stop - 1) (move old_start);
           narrow (old_start + 1) (old_stop - 1) (next_start + 1) (next_stop - 1))
         else (old_start, old_stop, next_start, next_stop)
   in
   let old_start, old_stop, next_start, next_stop = narrow 0 old_length 0 next_length in
+  let range from stop = Array.init (stop - from) (fun x -> from + x) in
   match (old_start < old_stop, next_start < next_stop) with
-  | false, _ -> { steps; dropped = [] }
-  | true, false -> { steps; dropped = List.init (old_stop - old_start) (fun x -> old_start + x) }
+  | false, _ -> { steps; dropped = [||] }
+  | true, false -> { steps; dropped = range old_start old_stop }
   | true, true ->
       let rec capacity size = if size >= 2 * (old_stop - old_start) then size else capacity (2 * size) in
       let size = capacity 8 in
-      let table = Array.make size (-1) and claims = Array.make old_length `Unclaimed in
+      let table = Array.make size (-1) and claimed = Array.make old_length 0 in
       let slot key =
         let code = ref 0 in
         String.iter (fun letter -> code := ((!code * 31) + Char.code letter) land 0x3FFFFFFF) key;
@@ -50,45 +63,57 @@ let plan ~old ~next =
         let i = Array.unsafe_get table at in
         if i < 0 then None
         else
-          match (String.equal (Array.unsafe_get old i) key, Array.unsafe_get claims i) with
-          | true, `Unclaimed ->
-              Array.unsafe_set claims i `Claimed;
+          match (String.equal (Array.unsafe_get old i) key, Array.unsafe_get claimed i) with
+          | true, 0 ->
+              Array.unsafe_set claimed i 1;
               Some i
-          | true, `Claimed | false, _ -> claim key ((at + 1) land (size - 1))
+          | true, _ | false, _ -> claim key ((at + 1) land (size - 1))
       in
-      let reused = ref [] in
-      for j = next_stop - 1 downto next_start do
+      let span = next_stop - next_start in
+      let targets = Array.make span 0 and sources = Array.make span 0 in
+      let reused = ref 0 in
+      for j = next_start to next_stop - 1 do
         let key = Array.unsafe_get next j in
         Option.iter
           (fun i ->
-            Array.unsafe_set steps j (Move i);
-            reused := (j, i) :: !reused)
+            Array.unsafe_set steps j (move i);
+            Array.unsafe_set targets !reused j;
+            Array.unsafe_set sources !reused i;
+            incr reused)
           (claim key (slot key))
       done;
-      let reused = Array.of_list !reused in
-      let tails = Array.make (Array.length reused) 0 in
-      let previous = Array.make (Array.length reused) None in
+      let count = !reused in
+      let tails = Array.make count 0 and previous = Array.make count (-1) in
       let longest = ref 0 in
-      Array.iteri
-        (fun x (_, source) ->
-          let rec search low high =
-            if low >= high then low
-            else
-              let middle = (low + high) / 2 in
-              if snd (Array.unsafe_get reused (Array.unsafe_get tails middle)) < source then search (middle + 1) high
-              else search low middle
-          in
-          let at = search 0 !longest in
-          Array.unsafe_set previous x (if at = 0 then None else Some (Array.unsafe_get tails (at - 1)));
-          Array.unsafe_set tails at x;
-          longest := max !longest (at + 1))
-        reused;
-      let rec keep x =
-        let j, i = Array.unsafe_get reused x in
-        Array.unsafe_set steps j (Keep i);
-        Option.iter keep (Array.unsafe_get previous x)
+      for x = 0 to count - 1 do
+        let source = Array.unsafe_get sources x in
+        let rec search low high =
+          if low >= high then low
+          else
+            let middle = (low + high) / 2 in
+            if Array.unsafe_get sources (Array.unsafe_get tails middle) < source then search (middle + 1) high
+            else search low middle
+        in
+        let at = search 0 !longest in
+        Array.unsafe_set previous x (if at = 0 then -1 else Array.unsafe_get tails (at - 1));
+        Array.unsafe_set tails at x;
+        longest := max !longest (at + 1)
+      done;
+      let rec kept_back x =
+        if x >= 0 then (
+          Array.unsafe_set steps (Array.unsafe_get targets x) (keep (Array.unsafe_get sources x));
+          kept_back (Array.unsafe_get previous x))
       in
-      if !longest > 0 then keep (Array.unsafe_get tails (!longest - 1));
-      { steps; dropped = List.filter
-            (fun i -> match Array.unsafe_get claims i with `Unclaimed -> true | `Claimed -> false)
-            (List.init (old_stop - old_start) (fun x -> old_start + x)) }
+      if !longest > 0 then kept_back (Array.unsafe_get tails (!longest - 1));
+      let unclaimed = ref 0 in
+      for i = old_start to old_stop - 1 do
+        if Array.unsafe_get claimed i = 0 then incr unclaimed
+      done;
+      let dropped = Array.make !unclaimed 0 in
+      let at = ref 0 in
+      for i = old_start to old_stop - 1 do
+        if Array.unsafe_get claimed i = 0 then (
+          Array.unsafe_set dropped !at i;
+          incr at)
+      done;
+      { steps; dropped }
