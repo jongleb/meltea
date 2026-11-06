@@ -185,7 +185,7 @@ after every step.
 </picture>
 
 One module with the model, `update` and `view` builds for both sides
-([`examples/served`](../examples/served)):
+([`examples/served`](examples/served)):
 
 ```
 (executable                              ; the server, native
