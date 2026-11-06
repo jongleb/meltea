@@ -27,6 +27,9 @@ type throwing =
   | Recovers  (** Renders again, so a template must be able to forget what it wrote. *)
   | Stops
 
+(** Whether a front end numbers the positions of children as React's [useId] does. *)
+type ids = Tree_ids | No_ids
+
 (** How a front end shapes elements around the templates. *)
 type frontend = {
   name : string;  (** For error messages. *)
@@ -41,6 +44,9 @@ type frontend = {
       (** The hole value of a [style] prop. *)
   reference : Ppxlib.location -> [ `Required | `Optional ] -> Ppxlib.expression -> Ppxlib.expression;
       (** The hole value of a [ref] prop: the callback, or a pair of what tells the ref from another and the callback. *)
+  inner_html : Ppxlib.location -> Ppxlib.expression -> Ppxlib.expression;
+      (** The HTML of a [dangerouslySetInnerHTML] value. *)
+  ids : ids;
   classify : Ppxlib.expression -> special option;
   extra : string -> Dom_props.kind option;  (** Props the front end adds to reason-react's. *)
   each : Ppxlib.location -> Ppxlib.expression -> Ppxlib.expression option;
@@ -52,6 +58,9 @@ type output = Client_only | Hydratable | Server
 
 val output : output ref
 val without_jsx : Ppxlib.attributes -> Ppxlib.attributes option
+
+(** The positions a child slot is at, as count, index, count, index…, when its front end numbers them. *)
+val fork_path : Ppxlib.expression -> Ppxlib.expression option
 val list_items : Ppxlib.expression -> Ppxlib.expression list option
 
 (** Whether a loop's row function takes the item, or the index and then the item. *)

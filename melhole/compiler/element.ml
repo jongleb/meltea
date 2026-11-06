@@ -15,6 +15,7 @@ type handlers = Closures | Linked of string
 
 (** What a front end does after a render throws halfway through a template. *)
 type throwing = Recovers | Stops
+type ids = Tree_ids | No_ids
 type output = Client_only | Hydratable | Server
 
 let output = ref Client_only
@@ -30,6 +31,8 @@ type frontend = {
   throwing : throwing;
   style : location -> [ `Required | `Optional ] -> expression -> expression;
   reference : location -> [ `Required | `Optional ] -> expression -> expression;
+  inner_html : location -> expression -> expression;
+  ids : ids;
   classify : expression -> special option;
   extra : string -> Dom_props.kind option;
   each : location -> expression -> expression option;
@@ -69,6 +72,11 @@ let lowercase_call expression =
 
 let prop frontend ~loc ~label kind requirement value =
   let hole site expression = Dynamic (site, expression) in
+  let kind : Dom_props.kind =
+    match (!output, kind) with
+    | Server, Dom_props.Attribute (name, value) -> Dom_props.Attribute (Dom_props.react_name name, value)
+    | (Server | Client_only | Hydratable), kind -> kind
+  in
   let literal =
     match value.pexp_desc with
     | Pexp_constant (Pconst_string (text, _, _)) -> `String text
@@ -99,65 +107,112 @@ let prop frontend ~loc ~label kind requirement value =
         hole site
           [%expr (Stdlib.Option.value ~default:[%e default] ([%e value] : [%t type_of kind] option))]
   in
-  match (kind, requirement, literal) with
-  | Dom_props.Ignored, _, _ -> Absent
-  | Attribute (name, Text), `Required, `String text -> Static (name, Valued text)
-  | Attribute (name, Text), `Required, _ ->
+  let bound =
+    match (!output, kind) with
+    | Server, Attribute (name, Integer) -> Dom_props.positive name
+    | (Server | Client_only | Hydratable), _ -> `Any
+  in
+  match (kind, requirement, literal, bound) with
+  | Attribute (_, Integer), `Required, `Number digits, `Positive when int_of_string digits < 1 -> Absent
+  | Attribute (name, Integer), `Required, (`String _ | `True | `False | `Dynamic), `Positive ->
+      hole (Attr name)
+        [%expr
+          (match ([%e value] : int) with
+          | __melhole_number when __melhole_number >= 1 -> Some (string_of_int __melhole_number)
+          | _ -> None)]
+  | Attribute (name, Integer), `Optional, _, `Positive ->
+      hole (Attr name)
+        [%expr
+          Stdlib.Option.bind ([%e value] : int option) (fun __melhole_number ->
+              match __melhole_number >= 1 with true -> Some (string_of_int __melhole_number) | false -> None)]
+  | Dom_props.Ignored, _, _, _ -> Absent
+  | Attribute (name, Text), `Required, `String text, _ -> Static (name, Valued text)
+  | Attribute (name, Text), `Required, _, _ ->
       hole (Attr name) [%expr (Some ([%e value] : string))]
-  | Attribute (name, Flag), `Required, `True -> Static (name, Bare)
-  | Attribute (_, Flag), `Required, `False -> Absent
-  | Attribute (name, Flag), `Required, _ ->
+  | Attribute (name, Flag), `Required, `True, _ -> Static (name, Bare)
+  | Attribute (_, Flag), `Required, `False, _ -> Absent
+  | Attribute (name, Flag), `Required, _, _ ->
       hole (Attr name)
         [%expr (if ([%e value] : bool) then Some "" else None)]
-  | Attribute (name, Booleanish), `Required, `True -> Static (name, Valued "true")
-  | Attribute (name, Booleanish), `Required, `False -> Static (name, Valued "false")
-  | Attribute (name, Booleanish), `Required, _ ->
+  | Attribute (name, Booleanish), `Required, `True, _ -> Static (name, Valued "true")
+  | Attribute (name, Booleanish), `Required, `False, _ -> Static (name, Valued "false")
+  | Attribute (name, Booleanish), `Required, _, _ ->
       hole (Attr name)
         [%expr
           (Some (if ([%e value] : bool) then "true" else "false"))]
-  | Attribute (name, (Integer | Decimal)), `Required, `Number digits ->
+  | Attribute (name, (Integer | Decimal)), `Required, `Number digits, _ ->
       Static (name, Valued digits)
-  | Attribute (name, Integer), `Required, _ ->
+  | Attribute (name, Integer), `Required, _, _ ->
       hole (Attr name)
         [%expr (Some (string_of_int ([%e value] : int)))]
-  | Attribute (name, Decimal), `Required, _ ->
+  | Attribute (name, Decimal), `Required, _, _ ->
       hole (Attr name)
         [%expr (Some ([%e float_text ~loc] ([%e value] : float)))]
-  | Attribute (name, Text), `Optional, _ ->
+  | Attribute (name, Text), `Optional, _, _ ->
       hole (Attr name) [%expr ([%e value] : string option)]
-  | Attribute (name, Flag), `Optional, _ ->
+  | Attribute (name, Flag), `Optional, _, _ ->
       hole (Attr name)
         [%expr
           
             (match ([%e value] : bool option) with
             | Some true -> Some ""
             | Some false | None -> None)]
-  | Attribute (name, Booleanish), `Optional, _ ->
+  | Attribute (name, Booleanish), `Optional, _, _ ->
       hole (Attr name)
         [%expr
           
             (Stdlib.Option.map
                (fun flag -> if flag then "true" else "false")
                ([%e value] : bool option))]
-  | Attribute (name, Integer), `Optional, _ ->
+  | Attribute (name, Integer), `Optional, _, _ ->
       hole (Attr name)
         [%expr (Stdlib.Option.map string_of_int ([%e value] : int option))]
-  | Attribute (name, Decimal), `Optional, _ ->
+  | Attribute (name, Decimal), `Optional, _, _ ->
       hole (Attr name)
         [%expr
           (Stdlib.Option.map [%e float_text ~loc] ([%e value] : float option))]
-  | Property (name, kind), requirement, _ -> property (Prop name) kind requirement
-  | Controlled (name, kind), requirement, _ -> property (Control name) kind requirement
-  | Handler event, requirement, _ ->
+  | Property (name, kind), requirement, _, _ -> property (Prop name) kind requirement
+  | Controlled (name, kind), requirement, _, _ -> property (Control name) kind requirement
+  | Handler event, requirement, _, _ ->
       hole (Handler event) (frontend.handler loc { label; event; requirement; value })
-  | Style, requirement, _ -> hole Style (frontend.style loc requirement value)
-  | Ref, requirement, _ -> hole Ref (frontend.reference loc requirement value)
-  | Inner_html, `Required, _ -> hole (Prop "innerHTML") [%expr Melhole.View.html_of [%e value]]
-  | Inner_html, `Optional, _ ->
-      hole (Prop "innerHTML") [%expr Stdlib.Option.fold ~none:"" ~some:Melhole.View.html_of [%e value]]
+  | Style, requirement, _, _ -> hole Style (frontend.style loc requirement value)
+  | Ref, requirement, _, _ -> hole Ref (frontend.reference loc requirement value)
+  | Inner_html, `Required, _, _ -> hole (Prop "innerHTML") (frontend.inner_html loc value)
+  | Inner_html, `Optional, _, _ ->
+      hole (Prop "innerHTML")
+        [%expr Stdlib.Option.fold ~none:"" ~some:(fun __melhole_html -> [%e frontend.inner_html loc [%expr __melhole_html]]) [%e value]]
 
-let rec analyse frontend ~loc tag arguments =
-  let statics = ref [] and dynamics = ref [] and children = ref [] and key = ref None in
+let fork_marker = "melhole.forks"
+
+let forked frontend ~loc forks expression =
+  match (frontend.ids, forks, !output) with
+  | No_ids, _, _ | Tree_ids, [], _ | Tree_ids, _, Client_only -> expression
+  | Tree_ids, _ :: _, (Server | Hydratable) ->
+      {
+        expression with
+        pexp_attributes =
+          attribute ~loc ~name:{ txt = fork_marker; loc }
+            ~payload:
+              (PStr
+                 [
+                   pstr_eval ~loc
+                     (pexp_array ~loc (List.concat_map (fun (count, index) -> [ eint ~loc count; eint ~loc index ]) forks))
+                     [];
+                 ])
+          :: expression.pexp_attributes;
+      }
+
+let fork_path expression =
+  List.find_map
+    (fun attribute ->
+      match (String.equal attribute.attr_name.txt fork_marker, attribute.attr_payload) with
+      | true, PStr [ { pstr_desc = Pstr_eval (path, _); _ } ] -> Some path
+      | _ -> None)
+    expression.pexp_attributes
+
+let rec analyse frontend ~loc ~forks tag arguments =
+  let given = ref [] and children = ref [] and key = ref None in
+  let ranks = List.mapi (fun index prop -> (Dom_props.Prop.to_string prop, index)) Dom_props.Prop.all in
   List.iter
     (fun (label, value) ->
       match label with
@@ -166,55 +221,85 @@ let rec analyse frontend ~loc tag arguments =
       | Labelled "children" ->
           children :=
             (match list_items value with
-            | Some items -> List.filter_map (child frontend) items
+            | Some items ->
+                let count = List.length items in
+                List.concat
+                  (List.mapi
+                     (fun index item ->
+                       Option.to_list
+                         (child frontend
+                            ~forks:(match count with 0 | 1 -> forks | _ -> forks @ [ (count, index) ])
+                            item))
+                     items)
             | None ->
                 [
                   Markup.Slot
                     ( Child_slot,
-                      [%expr [%e frontend.unwrap loc (frontend.map value)]] );
+                      forked frontend ~loc forks [%expr [%e frontend.unwrap loc (frontend.map value)]] );
                 ])
       | Labelled name | Optional name -> (
           let requirement =
             match label with Optional _ -> `Optional | Labelled _ | Nolabel -> `Required
           in
           match
-            match Dom_props.Prop.of_string name with
-            | Some parsed -> Some (Dom_props.kind parsed)
-            | None -> frontend.extra name
+            match (Dom_props.Prop.of_string name, tag) with
+            | Some _, "option" when String.equal name "value" -> Some (Dom_props.Attribute ("value", Text))
+            | Some _, "textarea" when String.equal name "defaultValue" && not (!output = Server) ->
+                Some (Dom_props.Property ("defaultValue", Text))
+            | Some parsed, _ -> Some (Dom_props.kind parsed)
+            | None, _ -> frontend.extra name
           with
           | None ->
               Location.raise_errorf ~loc:value.pexp_loc "%s: <%s> has no prop %s" frontend.name tag
                 name
           | Some kind -> (
-              match prop frontend ~loc ~label:name kind requirement (frontend.map value) with
-              | Static (attribute, static) -> statics := (attribute, static) :: !statics
-              | Dynamic (site, hole) -> dynamics := (site, hole) :: !dynamics
-              | Absent -> ())))
+              match (!output, name, tag) with
+              | Server, ("defaultValue" | "defaultChecked"), tag
+                when not (List.mem tag [ "input"; "textarea"; "select" ]) ->
+                  ()
+              | (Server | Client_only | Hydratable), _, _ ->
+                  given :=
+                    ( ( (match requirement with `Required -> 0 | `Optional -> 1),
+                        Option.value ~default:(List.length ranks) (List.assoc_opt name ranks) ),
+                      prop frontend ~loc ~label:name kind requirement (frontend.map value) )
+                    :: !given)))
     arguments;
   (match (Markup.void tag, !children) with
   | `Void, _ :: _ -> Location.raise_errorf ~loc "%s: <%s> cannot have children" frontend.name tag
   | `Void, [] | `Container, _ -> ());
-  ( { Markup.tag; statics = List.rev !statics; dynamics = List.rev !dynamics; children = !children },
+  let ordered =
+    match !output with
+    | Server ->
+        List.map
+          (fun (_, made) ->
+            match made with
+            | Static (attribute, Valued text) -> Dynamic (Attr attribute, [%expr Some [%e estring ~loc text]])
+            | Static (attribute, Bare) -> Dynamic (Attr attribute, [%expr Some ""])
+            | Dynamic _ | Absent -> made)
+          (List.stable_sort (fun (first, _) (second, _) -> compare first second) (List.rev !given))
+    | Client_only | Hydratable -> List.rev_map snd !given
+  in
+  ( {
+      Markup.tag;
+      statics = List.filter_map (fun made -> match made with Static (attribute, static) -> Some (attribute, static) | Dynamic _ | Absent -> None) ordered;
+      dynamics = List.filter_map (fun made -> match made with Dynamic (site, hole) -> Some (site, hole) | Static _ | Absent -> None) ordered;
+      children = !children;
+    },
     !key )
 
-and child frontend item =
+and child frontend ~forks item =
   let loc = item.pexp_loc in
   match lowercase_call item with
-  | Some (tag, arguments) -> Some (Markup.Element (fst (analyse frontend ~loc tag arguments)))
+  | Some (tag, arguments) -> Some (Markup.Element (fst (analyse frontend ~loc ~forks tag arguments)))
   | None -> (
       match frontend.classify item with
       | Some Nothing -> None
       | Some (Text (String_text, { pexp_desc = Pexp_constant (Pconst_string (text, _, _)); _ })) ->
           Some (Markup.Text text)
-      | Some
-          (Text
-             ( (Int_text | Float_text),
-               {
-                 pexp_desc =
-                   Pexp_constant (Pconst_integer (digits, None) | Pconst_float (digits, None));
-                 _;
-               } )) ->
-          Some (Markup.Text digits)
+      | Some (Text (Int_text, { pexp_desc = Pexp_constant (Pconst_integer (digits, None)); _ })) ->
+          Some (Markup.Text (string_of_int (int_of_string digits)))
+      | Some (Text (Float_text, { pexp_desc = Pexp_constant (Pconst_float (digits, None)); _ })) ->
+          Some (Markup.Text (Melhole_server.float (float_of_string digits)))
       | Some (Text (Int_text, value)) ->
           Some
             (Markup.Slot
@@ -234,48 +319,140 @@ and child frontend item =
           Some
             (Markup.Slot
                ( Child_slot,
-                 match frontend.each loc item with
-                 | Some loop -> loop
-                 | None -> frontend.unwrap loc (frontend.map item) )))
+                 forked frontend ~loc forks
+                   (match frontend.each loc item with
+                   | Some loop -> loop
+                   | None -> frontend.unwrap loc (frontend.map item)) )))
 
 let row_marker = "melhole.row"
 
 let served frontend ~loc (element : expression Markup.element) key =
   let writer = [%expr __melhole_writer] in
-  let checks = ref [] in
+  let checks = ref [] and bindings = ref [] and choices = ref 0 in
+  let bound value =
+    let name = "__melhole_bound_" ^ string_of_int (List.length !bindings) in
+    bindings := (name, value) :: !bindings;
+    evar ~loc name
+  in
   let rec ops (tree : expression Markup.element) =
-    let opening =
-      "<" ^ tree.tag
-      ^ String.concat ""
-          (List.map
-             (fun (name, static) ->
-               match static with
-               | Markup.Valued value -> " " ^ name ^ "=\"" ^ Melhole_server.escape value ^ "\""
-               | Bare -> " " ^ name ^ "=\"\"")
-             tree.statics)
+    let preformatted = match tree.tag with "pre" | "listing" | "textarea" -> `Preformatted | _ -> `Plain in
+    let written name value =
+      match value with
+      | [%expr Some [%e? { pexp_desc = Pexp_constant (Pconst_string (text, _, _)); _ }]] ->
+          `Tag (" " ^ name ^ "=\"" ^ Melhole_server.escape text ^ "\"")
+      | _ -> `Run [%expr Melhole_server.attribute [%e writer] [%e estring ~loc name] [%e value]]
     in
-    let content = ref None in
-    let attributes =
-      List.filter_map
-        (fun ((site : Markup.site), value) ->
-          match (site, tree.tag) with
-          | Attr name, _ -> Some (`Run [%expr Melhole_server.attribute [%e writer] [%e estring ~loc name] [%e value]])
-          | Prop "innerHTML", _ ->
-              content := Some [%expr Melhole_server.raw [%e writer] [%e value]];
-              None
-          | (Prop "value" | Control "value"), "textarea" ->
-              content := Some [%expr Melhole_server.dynamic_text [%e writer] [%e value]];
-              None
-          | (Prop "value" | Control "value"), _ ->
-              Some (`Run [%expr Melhole_server.attribute [%e writer] "value" (Some [%e value])])
-          | (Prop (("checked" | "selected") as name) | Control (("checked" | "selected") as name)), _ ->
-              Some (`Run [%expr Melhole_server.flag [%e writer] [%e estring ~loc name] [%e value]])
-          | Style, _ -> Some (`Run [%expr Melhole_server.style [%e writer] [%e value]])
-          | (Prop _ | Control _ | Handler _ | Ref | Sole_text), _ -> Some (`Typed [%expr ignore (fun () -> [%e value])]))
-        tree.dynamics
+    let preferred group =
+      match List.partition (fun ((site : Markup.site), _) -> match site with Attr _ -> false | _ -> true) group with
+      | given :: _, _ | [], given :: _ -> Some given
+      | [], [] -> None
     in
-    List.iter (fun step -> match step with `Typed run -> checks := run :: !checks | `Run _ -> ()) attributes;
-    let attributes = List.filter_map (fun step -> match step with `Run run -> Some (`Run run) | `Typed _ -> None) attributes in
+    let named name ((site : Markup.site), _) =
+      match site with
+      | Attr found | Prop found | Control found -> String.equal found name
+      | Handler _ | Ref | Style | Sole_text -> false
+    in
+    let values, rest =
+      match tree.tag with
+      | "input" | "textarea" | "select" -> List.partition (named "value") tree.dynamics
+      | _ -> ([], tree.dynamics)
+    in
+    let checks_of, rest =
+      match tree.tag with "input" -> List.partition (named "checked") rest | _ -> ([], rest)
+    in
+    let marked, rest =
+      match tree.tag with
+      | "option" -> List.partition (fun ((site : Markup.site), _) -> match site with Prop "selected" -> true | _ -> false) rest
+      | _ -> ([], rest)
+    in
+    let content = ref None and choice = ref None in
+    let attribute ((site : Markup.site), value) =
+      match site with
+      | Attr name -> Some (written name value)
+      | Prop "innerHTML" ->
+          let html = bound value in
+          content :=
+            Some
+              (match preformatted with
+              | `Preformatted -> [%expr Melhole_server.leading_newline [%e writer] [%e html]; Melhole_server.raw [%e writer] [%e html]]
+              | `Plain -> [%expr Melhole_server.raw [%e writer] [%e html]]);
+          None
+      | Prop "value" | Control "value" -> Some (`Run [%expr Melhole_server.attribute [%e writer] "value" (Some [%e value])])
+      | Prop name | Control name -> Some (`Run [%expr Melhole_server.flag [%e writer] [%e estring ~loc name] [%e value]])
+      | Style -> Some (`Run [%expr Melhole_server.style [%e writer] [%e value]])
+      | Handler _ | Ref | Sole_text ->
+          checks := [%expr ignore (fun () -> [%e value])] :: !checks;
+          None
+    in
+    let rest, option_value =
+      match (tree.tag, List.find_opt (named "value") rest) with
+      | "option", Some ((site : Markup.site), value) ->
+          let shared = bound value in
+          ( List.map (fun (found, given) -> match given == value with true -> (found, shared) | false -> (found, given)) rest,
+            Some (match site with Attr _ -> [%expr Stdlib.Option.value ~default:"" [%e shared]] | _ -> shared) )
+      | "option", None ->
+          ( rest,
+            Some
+              (List.fold_left
+                 (fun text (node : expression Markup.node) ->
+                   match node with
+                   | Text static -> [%expr [%e text] ^ [%e estring ~loc static]]
+                   | Slot (Text_slot, value) -> [%expr [%e text] ^ [%e value]]
+                   | Slot (Child_slot, _) | Element _ -> text)
+                 [%expr ""] tree.children) )
+      | _ -> (rest, None)
+    in
+    let attributes = List.filter_map attribute rest in
+    let tail_attributes =
+      Option.to_list
+        (Option.map
+           (fun ((site : Markup.site), value) ->
+             match site with
+             | Attr _ -> `Run [%expr Melhole_server.attribute [%e writer] "checked" [%e value]]
+             | _ -> `Run [%expr Melhole_server.flag [%e writer] "checked" [%e value]])
+           (preferred checks_of))
+      @ (match tree.tag with
+        | "input" ->
+            Option.to_list
+              (Option.map
+                 (fun ((site : Markup.site), value) ->
+                   match site with
+                   | Attr _ -> `Run [%expr Melhole_server.attribute [%e writer] "value" [%e value]]
+                   | _ -> `Run [%expr Melhole_server.attribute [%e writer] "value" (Some [%e value])])
+                 (preferred values))
+        | "textarea" ->
+            Option.iter
+              (fun ((site : Markup.site), value) ->
+                let text =
+                  bound (match site with Attr _ -> [%expr Stdlib.Option.value ~default:"" [%e value]] | _ -> value)
+                in
+                content :=
+                  Some
+                    [%expr
+                      Melhole_server.leading_newline [%e writer] [%e text];
+                      Melhole_server.dynamic_text [%e writer] [%e text]])
+              (preferred values);
+            []
+        | "select" ->
+            choice :=
+              Option.map
+                (fun ((site : Markup.site), value) -> match site with Attr _ -> value | _ -> [%expr Some [%e value]])
+                (preferred values);
+            []
+        | _ -> [])
+      @ Option.to_list
+          (Option.map
+             (fun value ->
+               `Run
+                 [%expr
+                   Melhole_server.option_selected [%e writer] [%e value]
+                     [%e
+                       Option.fold ~none:[%expr Melhole_server.Unmarked]
+                         ~some:(fun (_, flag) ->
+                           [%expr match [%e flag] with true -> Melhole_server.Marked | false -> Melhole_server.Unmarked])
+                         (List.nth_opt marked 0)]])
+             option_value)
+    in
     let closing = match Markup.void tree.tag with `Void -> "/>" | `Container -> ">" in
     let rec children nodes known =
       match nodes with
@@ -290,14 +467,53 @@ let served frontend ~loc (element : expression Markup.element) key =
                 ([ `Run [%expr Melhole_server.static_text [%e writer] [%e estring ~loc (Melhole_server.escape text)]] ], `Text)
             | Element child, _ -> (ops child, `Other)
             | Slot (Text_slot, value), _ -> ([ `Run [%expr Melhole_server.dynamic_text [%e writer] [%e value]] ], `Unknown)
-            | Slot (Child_slot, value), _ -> ([ `Run [%expr Melhole_server.write [%e writer] [%e value]] ], `Unknown)
+            | Slot (Child_slot, value), _ ->
+                ( [
+                    `Run
+                      (Option.fold
+                         ~none:[%expr Melhole_server.write [%e writer] [%e value]]
+                         ~some:(fun path ->
+                           [%expr
+                             Melhole_server.forked [%e writer] [%e path]
+                               [%e
+                                 {
+                                   value with
+                                   pexp_attributes =
+                                     List.filter
+                                       (fun attribute -> not (String.equal attribute.attr_name.txt fork_marker))
+                                       value.pexp_attributes;
+                                 }]])
+                         (fork_path value));
+                  ],
+                  `Unknown )
           in
           let later, last = children rest after in
           (now @ later, last)
     in
-    let inner = Option.fold ~none:(fst (children tree.children `Other)) ~some:(fun run -> [ `Run run ]) !content in
+    let nodes =
+      match (preformatted, tree.tag, tree.children) with
+      | `Preformatted, ("pre" | "listing"), [ Text text ] when String.length text > 0 && text.[0] = '\n' -> [ Markup.Text ("\n" ^ text) ]
+      | `Preformatted, ("pre" | "listing"), [ Slot (Text_slot, value) ] ->
+          let text = bound value in
+          content :=
+            Some
+              [%expr
+                Melhole_server.leading_newline [%e writer] [%e text];
+                Melhole_server.dynamic_text [%e writer] [%e text]];
+          []
+      | _, _, nodes -> nodes
+    in
+    let inner = Option.fold ~none:(fst (children nodes `Other)) ~some:(fun run -> [ `Run run ]) !content in
+    let inner =
+      Option.fold ~none:inner
+        ~some:(fun value ->
+          incr choices;
+          let around = "__melhole_choice_" ^ string_of_int !choices in
+          (`Choose (around, value) :: inner) @ [ `Run [%expr Melhole_server.chosen [%e writer] [%e evar ~loc around]] ])
+        !choice
+    in
     let tail = match Markup.void tree.tag with `Void -> [] | `Container -> [ `Tag ("</" ^ tree.tag ^ ">") ] in
-    (`Tag opening :: attributes) @ (`Tag closing :: inner) @ tail
+    (`Tag ("<" ^ tree.tag) :: attributes) @ tail_attributes @ (`Tag closing :: inner) @ tail
   in
   let steps = ops element in
   let rec merged steps =
@@ -317,10 +533,18 @@ let served frontend ~loc (element : expression Markup.element) key =
           | `Tag chunk -> [%expr Melhole_server.markup [%e writer] [%e estring ~loc chunk]]
           | `Text chunk -> [%expr Melhole_server.markup_text [%e writer] [%e estring ~loc chunk]]
           | `Run run -> run
+          | `Choose (_, value) -> [%expr Melhole_server.choose [%e writer] [%e value]]
         in
-        [%expr [%e run]; [%e rest]])
+        match step with
+        | `Choose (around, _) -> [%expr let [%p pvar ~loc around] = [%e run] in [%e rest]]
+        | `Tag _ | `Text _ | `Run _ -> [%expr [%e run]; [%e rest]])
       (List.map (fun run -> `Run run) (List.rev !checks) @ merged steps)
       [%expr ()]
+  in
+  let body =
+    List.fold_left
+      (fun body (name, value) -> [%expr let [%p pvar ~loc name] = [%e value] in [%e body]])
+      body !bindings
   in
   let instance = frontend.wrap loc [%expr Melhole_server.element (fun __melhole_writer -> [%e body])] in
   Option.fold ~none:instance
@@ -328,7 +552,7 @@ let served frontend ~loc (element : expression Markup.element) key =
     key
 
 let lowercase frontend ~loc ~attributes tag arguments =
-  let element, key = analyse frontend ~loc tag arguments in
+  let element, key = analyse frontend ~loc ~forks:[] tag arguments in
   match !output with
   | Server -> served frontend ~loc element key
   | Client_only | Hydratable ->
@@ -746,18 +970,38 @@ let lowercase frontend ~loc ~attributes tag arguments =
                      let named = hole_name (hole_of value) in
                      [%expr
                        let [%p pvar ~loc named] =
-                         Melhole.View.adopt_content [%e evar ~loc (cursor indices)]
-                           (Melhole.View.collected [%e evar ~loc (from named)])
-                           Melhole.View.Before_next
+                         [%e
+                           Option.fold
+                             ~none:
+                               [%expr
+                                 Melhole.View.adopt_content [%e evar ~loc (cursor indices)]
+                                   (Melhole.View.collected [%e evar ~loc (from named)])
+                                   Melhole.View.Before_next]
+                             ~some:(fun path ->
+                               [%expr
+                                 Melhole.View.adopt_forked [%e evar ~loc (cursor indices)]
+                                   (Melhole.View.collected [%e evar ~loc (from named)])
+                                   Melhole.View.Before_next [%e path]])
+                             (fork_path value)]
                        in
                        [%e body]]
                  | Child_before_anchor (indices, value) ->
                      let named = hole_name (hole_of value) in
                      [%expr
                        let [%p pvar ~loc named] =
-                         Melhole.View.adopt_content [%e evar ~loc (cursor indices)]
-                           (Melhole.View.collected [%e evar ~loc (from named)])
-                           Melhole.View.Before_anchor
+                         [%e
+                           Option.fold
+                             ~none:
+                               [%expr
+                                 Melhole.View.adopt_content [%e evar ~loc (cursor indices)]
+                                   (Melhole.View.collected [%e evar ~loc (from named)])
+                                   Melhole.View.Before_anchor]
+                             ~some:(fun path ->
+                               [%expr
+                                 Melhole.View.adopt_forked [%e evar ~loc (cursor indices)]
+                                   (Melhole.View.collected [%e evar ~loc (from named)])
+                                   Melhole.View.Before_anchor [%e path]])
+                             (fork_path value)]
                        in
                        [%e body]])
                (Markup.adoption element) finished
@@ -1047,7 +1291,9 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                 [%e project] [%e pieces] [%e outer] [%e selectors]]
 
 let fragment frontend ~loc items =
-  frontend.wrap loc
-    [%expr
-      [%e match !output with Server -> [%expr Melhole_server.list] | Client_only | Hydratable -> [%expr Melhole.View.list]]
-        [%e elist ~loc (List.map (fun item -> frontend.unwrap loc (frontend.map item)) items)]]
+  let children = List.map (fun item -> frontend.unwrap loc (frontend.map item)) items in
+  match (!output, frontend.ids, children) with
+  | Server, Tree_ids, [ only ] -> frontend.wrap loc only
+  | Server, Tree_ids, _ -> frontend.wrap loc [%expr Melhole_server.array [%e pexp_array ~loc children]]
+  | Server, No_ids, _ -> frontend.wrap loc [%expr Melhole_server.list [%e elist ~loc children]]
+  | (Client_only | Hydratable), _, _ -> frontend.wrap loc [%expr Melhole.View.list [%e elist ~loc children]]

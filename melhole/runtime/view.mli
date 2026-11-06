@@ -171,6 +171,12 @@ type medium = {
 
 val browser : medium
 val medium : medium ref
+
+(** What hydration tells about the positions it adopts children at, item [index] of [count]: Melact
+    counts them as React's [useId] does; by default nothing does. [join] leaves the last [fork]. *)
+type positions = { fork : (int -> int -> unit[@u]); join : (unit -> unit[@u]) }
+
+val positions : positions ref
 val backwards :
   int ->
   Template.position ->
@@ -268,6 +274,10 @@ val adopt_text : cursor -> string -> Dom.text
 type ending = Before_next | Before_anchor
 
 val adopt_content : cursor -> child -> ending -> Hole.content
+
+(** [adopt_content] of a child at the positions given as count, index, count, index…, counted by
+    [positions]. *)
+val adopt_forked : cursor -> child -> ending -> int array -> Hole.content
 val adopt_finish : cursor -> unit
 val collected : Hole.content -> child
 val collected_text : Dom.text -> string

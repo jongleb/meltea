@@ -270,6 +270,10 @@ let browser =
 
 let medium = ref browser
 
+type positions = { fork : (int -> int -> unit[@u]); join : (unit -> unit[@u]) }
+
+let positions = ref { fork = (fun [@u] _ _ -> ()); join = (fun [@u] () -> ()) }
+
 let remove (position : Template.position) live =
   visit live (fun [@u] node -> Dom_api.remove_child position.parent node);
   release live
@@ -1193,7 +1197,9 @@ let prop_hole element name : Hole.prop = { element; name; value = unset; echo = 
 let set_prop (hole : Hole.prop) value =
   let (Input old) = hole.value in
   if not (Dom_api.same old value) then (
-    Dom_api.set_property hole.element hole.name value;
+    (match (!medium.adoption, hole.name, Dom_api.same hole.value unset) with
+    | Server_nodes, "innerHTML", true -> ()
+    | _ -> Dom_api.set_property hole.element hole.name value);
     (match hole.echo with
     | Alone -> ()
     | Default_value -> (
@@ -1441,6 +1447,17 @@ let adopt_content cursor child ending : Hole.content =
   cursor.at <- after_of live cursor.at [@u];
   let before = match ending with Before_next -> cursor.at | Before_anchor -> Js.Null.return (anchor cursor) in
   { parent = cursor.parent; before; live; range = Settled }
+
+let adopt_forked cursor child ending path =
+  let pairs = Array.length path / 2 in
+  for at = 0 to pairs - 1 do
+    !positions.fork (Array.unsafe_get path (2 * at)) (Array.unsafe_get path ((2 * at) + 1)) [@u]
+  done;
+  let hole = adopt_content cursor child ending in
+  for _ = 1 to pairs do
+    !positions.join () [@u]
+  done;
+  hole
 
 let adopt_finish cursor =
   let rec rest node =

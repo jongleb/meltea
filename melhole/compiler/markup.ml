@@ -151,10 +151,11 @@ let adoption root =
           walk rest (index + 1) Other (Some (slot, value))
     in
     (match
-       List.concat_map (fun node -> match node with Text "" -> [] | Element _ | Text _ | Slot _ -> [ node ]) tree.children
+       ( List.concat_map (fun node -> match node with Text "" -> [] | Element _ | Text _ | Slot _ -> [ node ]) tree.children,
+         List.find_opt (fun (site, _) -> match site with Prop "innerHTML" -> true | _ -> false) tree.dynamics )
      with
-    | [ Slot (Text_slot, _) ] -> ()
-    | children ->
+    | [ Slot (Text_slot, _) ], _ | _, Some _ -> ()
+    | children, None ->
         walk children 0 Nothing None;
         emit (Leave path))
   in

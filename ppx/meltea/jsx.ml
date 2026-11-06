@@ -63,6 +63,8 @@ let mapper =
         reference =
           (fun loc _ _ ->
             Location.raise_errorf ~loc "meltea: views are pure; there are no refs in Meltea");
+        inner_html = (fun loc value -> [%expr Melhole.View.html_of [%e value]]);
+        ids = Element.No_ids;
         classify = html_text;
         extra =
           (fun name ->

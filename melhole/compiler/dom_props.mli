@@ -29,3 +29,10 @@ type kind =
   | Ignored  (** Accepted and dropped, like [suppressHydrationWarning]. *)
 
 val kind : Prop.t -> kind
+
+(** The name React's server writes for an attribute of this table: the HTML attributes React spells
+    in lower case, else the name itself. *)
+val react_name : string -> string
+
+(** The attributes React's server writes only for numbers of at least 1. *)
+val positive : string -> [ `Positive | `Any ]

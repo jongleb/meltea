@@ -1019,3 +1019,16 @@ let kind (prop : Prop.t) =
   | DangerouslySetInnerHTML -> Inner_html
   | SuppressContentEditableWarning -> Ignored
   | SuppressHydrationWarning -> Ignored
+
+let react_name name =
+  match String.lowercase_ascii name with
+  | ( "contenteditable" | "draggable" | "spellcheck" | "value" | "allowfullscreen" | "async" | "autofocus"
+    | "autoplay" | "controls" | "default" | "defer" | "disabled" | "disablepictureinpicture"
+    | "disableremoteplayback" | "formnovalidate" | "hidden" | "loop" | "nomodule" | "novalidate" | "open"
+    | "playsinline" | "readonly" | "required" | "reversed" | "scoped" | "seamless" | "itemscope" | "rowspan"
+    | "start" | "tabindex" | "crossorigin" | "src" | "href" | "action" | "formaction" ) as lowered ->
+      lowered
+  | _ -> name
+
+let positive name =
+  match name with "cols" | "rows" | "size" | "span" -> `Positive | _ -> `Any

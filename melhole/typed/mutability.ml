@@ -70,7 +70,15 @@ let of_answer ({ env; type_expr } : Answer.t) =
         | Answer.Function _ | Answer.Named _ | Answer.Other -> Unknown)
     | None when List.exists (fun (visited, given) -> Path.same visited path && List.equal Types.eq_type given arguments) seen ->
         Immutable_boxed
-    | None when List.exists (fun (visited, _) -> Path.same visited path) seen -> boxed (List.map (classify seen) arguments)
+    | None
+      when List.exists (fun (visited, _) -> Path.same visited path) seen
+           &&
+           match Env.find_type path env with
+           | { type_kind = Types.Type_record ([ _ ], Types.Record_unboxed _) | Types.Type_variant ([ _ ], Types.Variant_unboxed); _ } ->
+               false
+           | _ -> true
+           | exception Not_found -> true ->
+        boxed (List.map (classify seen) arguments)
     | None -> (
         match Env.find_type path env with
         | exception Not_found -> Unknown
