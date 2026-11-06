@@ -997,8 +997,14 @@ let set_style (hole : Hole.style) value =
          hole.value value)
   then (
     let style = Dom_api.style hole.element in
-    List.iter (fun (name, _) -> Dom_api.set_style style name "") hole.value;
-    List.iter (fun (name, value) -> Dom_api.set_style style name value) value;
+    let written name value =
+      match (String.length name >= 2 && String.equal (String.sub name 0 2) "--", value) with
+      | true, "" -> Dom_api.remove_style_property style name
+      | true, _ -> Dom_api.set_style_property style name value ""
+      | false, _ -> Dom_api.set_style style name value
+    in
+    List.iter (fun (name, _) -> written name "") hole.value;
+    List.iter (fun (name, value) -> written name value) value;
     hole.value <- value)
 
 let classes_hole element : Hole.classes = { element; value = [] }

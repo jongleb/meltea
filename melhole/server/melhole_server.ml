@@ -58,6 +58,9 @@ let flag writer name value = attribute writer name (match value with true -> Som
 
 let style writer declarations =
   let hyphenated name =
+    match String.length name >= 2 && String.equal (String.sub name 0 2) "--" with
+    | true -> name
+    | false ->
     let buffer = Buffer.create (String.length name + 4) in
     String.iter
       (fun character ->
