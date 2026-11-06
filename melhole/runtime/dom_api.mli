@@ -84,6 +84,9 @@ external set_property : Dom.element -> string -> 'a -> unit = ""
 [@@mel.set_index]
 
 external style : Dom.element -> Dom.cssStyleDeclaration = "style" [@@mel.get]
+external style_property : Dom.cssStyleDeclaration -> string -> string = "getPropertyValue" [@@mel.send]
+external set_style_property : Dom.cssStyleDeclaration -> string -> string -> string -> unit = "setProperty" [@@mel.send]
+external remove_style_property : Dom.cssStyleDeclaration -> string -> unit = "removeProperty" [@@mel.send]
 
 external set_style : Dom.cssStyleDeclaration -> string -> string -> unit = ""
 [@@mel.set_index]

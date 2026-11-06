@@ -22,6 +22,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: React 19 for the dual tests of React 19's APIs
+        run: npm ci --prefix test/dual19/env
       - run: opam exec -- dune build
       - name: native laws and ppx expect tests
         run: opam exec -- dune test

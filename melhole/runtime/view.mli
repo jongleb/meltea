@@ -144,6 +144,10 @@ val attr_hole : Dom.element -> string -> Hole.attr
 val set_attr : Hole.attr -> string option -> unit
 val prop_hole : Dom.element -> string -> Hole.prop
 val set_prop : Hole.prop -> 'a -> unit
+(** Forgets the values a mounted template's holes last read, so that its next update evaluates
+    and writes every hole again: for a render that threw halfway through its holes. *)
+val forget : live -> unit
+
 (** The HTML of a [dangerouslySetInnerHTML] prop; compiled code reads it through this, so that it
     needs no ppx of its own. *)
 external html_of : < __html : string > Js.t -> string = "__html" [@@mel.get]

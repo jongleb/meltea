@@ -883,6 +883,12 @@ let static markup =
         | _ -> None);
   }
 
+let rec forget live =
+  match live.state with
+  | Compiled_state { scope; _ } -> Array.fill scope.deps 0 (Array.length scope.deps) unset
+  | One_keyed_state (_, inner) | Memo_state (_, inner) | Pure_state { inner; _ } -> forget inner
+  | _ -> ()
+
 let check scope index value =
   let (Input remembered) = Array.unsafe_get scope.deps index in
   if Dom_api.same remembered value then Unchanged

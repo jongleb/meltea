@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 // Melange emits library imports as bare paths ("melange.js/caml.mjs") into the
@@ -14,8 +15,20 @@ const melangeOutput = {
   },
 };
 
+// The React 19 dual tests get React 19 from their own folder; everything else keeps React 18.
+const react19 = createRequire(resolve("test/dual19/env/package.json"));
+const reactNineteen = {
+  name: "react-19-for-dual19",
+  enforce: "pre",
+  resolveId(source, importer) {
+    if (!importer?.includes("/test/dual19/react/output/")) return null;
+    if (!/^react(-dom)?(\/|$)/.test(source)) return null;
+    return react19.resolve(source);
+  },
+};
+
 export default defineConfig({
-  plugins: [melangeOutput],
+  plugins: [reactNineteen, melangeOutput],
   // The emitted libraries live under node_modules; pre-bundling would cache
   // them across dune rebuilds.
   optimizeDeps: { noDiscovery: true, include: [] },
