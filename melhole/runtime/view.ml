@@ -311,15 +311,22 @@ let update position live child =
   match child.patch position live [@u] with
   | Some next -> next
   | None -> (
-      match extent position (front live Js.null) (last_of live) with
-      | Whole ->
-          Dom_api.set_text_content position.parent "";
-          release live;
-          child.build position [@u]
-      | Part ->
+      let first = front live Js.null in
+      match Js.Null.toOption first with
+      | None ->
           let next = child.build position [@u] in
-          remove position live;
-          next)
+          release live;
+          next
+      | Some _ -> (
+          match extent position first (last_of live) with
+          | Whole ->
+              Dom_api.set_text_content position.parent "";
+              release live;
+              child.build position [@u]
+          | Part ->
+              let next = child.build position [@u] in
+              remove position live;
+              next))
 
 let compare_inputs old next =
   let count = Array.length old in
