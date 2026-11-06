@@ -22,6 +22,11 @@ type handlers =
   | Linked of string
       (** One handler per site; the element carries the locals it reads, apart from this dispatch. *)
 
+(** What a front end does after a render throws halfway through a template. *)
+type throwing =
+  | Recovers  (** Renders again, so a template must be able to forget what it wrote. *)
+  | Stops
+
 (** How a front end shapes elements around the templates. *)
 type frontend = {
   name : string;  (** For error messages. *)
@@ -31,6 +36,7 @@ type frontend = {
   unwrap : Ppxlib.location -> Ppxlib.expression -> Ppxlib.expression;  (** An element into a [View.child]. *)
   handler : Ppxlib.location -> handler -> Ppxlib.expression;  (** The hole value of an event prop. *)
   handlers : handlers;
+  throwing : throwing;
   style : Ppxlib.location -> [ `Required | `Optional ] -> Ppxlib.expression -> Ppxlib.expression;
       (** The hole value of a [style] prop. *)
   reference : Ppxlib.location -> [ `Required | `Optional ] -> Ppxlib.expression -> Ppxlib.expression;

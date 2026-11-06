@@ -38,19 +38,25 @@ val each :
   input array ->
   child
 
-(** A mounted compiled template: the values its refresh last read and what it holds. *)
-type scope
+(** What a compiled template's frame needs at the moments only the runtime sees; [None] for nothing. *)
+type 'frame duties = {
+  placed : ('frame -> unit[@u]) option;  (** Once its root is in the document: refs get the element. *)
+  released : ('frame -> unit[@u]) option;  (** When it goes: content released, listeners and refs let go. *)
+  forgotten : ('frame -> unit[@u]) option;  (** After a render that threw halfway: every hole is written again. *)
+}
 
-(** A compiled template: its markup and how to make its holes on a fresh clone. *)
-type 'holes template
+(** A compiled template: its markup and how to make the frame of a fresh clone, the one record
+    that holds a mounted clone's holes and the values its refresh last read. *)
+type 'frame template
 
-(** A compiled loop whose rows are one element each: one template, one refresh taking the item, and
-    the key of an item, shared by all rows; a row costs its nodes, its scope and one record. *)
+(** A compiled loop whose rows are one element each: one template, the root of a row's frame, one
+    refresh taking the item, and the key of an item, shared by all rows; a row costs its nodes and
+    its frame. *)
 val rows :
   'item array ->
-  'holes template ->
-  int ->
-  (scope -> 'holes -> 'item -> unit[@u]) ->
+  'frame template ->
+  ('frame -> Dom.element[@u]) ->
+  ('frame -> 'item -> unit[@u]) ->
   ('item -> string[@u]) ->
   ('item -> int -> input array -> int -> unit[@u]) ->
   int ->
@@ -67,32 +73,50 @@ val items : child -> child list
 (** Whether a value differs from the one a scope remembers for it. *)
 type change = Changed | Unchanged
 
-val template : Template.t -> (scope -> Dom.node -> 'holes[@u]) -> 'holes template
+val template : Template.t -> (Dom.node -> 'frame[@u]) -> 'frame duties -> 'frame template
 
 val hydratable :
-  Template.t -> (scope -> Dom.node -> 'holes[@u]) -> (scope -> Dom.node -> 'holes -> 'holes[@u]) -> 'holes template
-val compiled : 'holes template -> int -> (scope -> 'holes -> unit[@u]) -> child
+  Template.t -> (Dom.node -> 'frame[@u]) -> 'frame duties -> (Dom.node -> 'frame -> 'frame[@u]) -> 'frame template
+
+val compiled : 'frame template -> ('frame -> unit[@u]) -> child
 val static : Template.t -> child
-val check : scope -> int -> 'a -> change
+
+val unset : input
+val no_inputs : input array
+
+val check : input -> 'a -> change
+
 val compare_inputs : input array -> input array -> change
 
-(** What a library that mounts its own kind of child keeps in it, like Melact's components. *)
-type hosted = ..
-
-type state
-
-(** A mounted child: its nodes and how to let go of what they hold. *)
-type live = private {
-  state : state;
-  each : ((Dom.node -> unit[@u]) -> unit[@u]);  (** Visits the top-level nodes in document order. *)
-  front : (Dom.node Js.null -> Dom.node Js.null[@u]);  (** The first node, or the given one. *)
-  release : (unit -> unit[@u]);  (** Releases handlers, effects and portals; the nodes stay. *)
-}
+(** A mounted child: its nodes and what they hold. *)
+type live
 
 val nothing : live
 
+val visit : live -> (Dom.node -> unit[@u]) -> unit
+
+val front : live -> Dom.node Js.null -> Dom.node Js.null
+
+val release : live -> unit
+
+(** How a library's own kind of child, like Melact's components, reaches what it holds: made once per kind. *)
+type 'value hosting
+
+val hosting :
+  visit:('value -> (Dom.node -> unit[@u]) -> unit[@u]) ->
+  first:('value -> Dom.node Js.null -> Dom.node Js.null[@u]) ->
+  let_go:('value -> unit[@u]) ->
+  'value hosting
+
+val live : 'value hosting -> 'value -> live
+
+val hosted : 'value hosting -> live -> 'value option
+
 (** Whether a content hole shows its children, or only remembers them for hydration's first pass. *)
-type range = Settled | Collecting
+type range = Settled | Collecting of collecting
+
+(** The children a collecting content hole was last given. *)
+and collecting
 
 (** Where a medium's nodes come from. *)
 type adoption = Fresh_nodes | Server_nodes
@@ -123,15 +147,6 @@ val backwards :
   (int -> Template.position -> 'made[@u]) ->
   ('made -> Dom.node Js.null -> Dom.node Js.null[@u]) ->
   'made array
-
-val live :
-  hosted ->
-  each:((Dom.node -> unit[@u]) -> unit[@u]) ->
-  front:(Dom.node Js.null -> Dom.node Js.null[@u]) ->
-  release:(unit -> unit[@u]) ->
-  live
-
-val hosted : live -> hosted option
 
 val host :
   build:(Template.position -> live[@u]) -> patch:(Template.position -> live -> live option[@u]) -> child
@@ -172,13 +187,15 @@ val restore_controlled : unit -> unit
 val controlled_hole : Dom.element -> string -> Hole.prop
 val style_hole : Dom.element -> Hole.style
 val set_style : Hole.style -> (string * string) list -> unit
-val handler_hole : scope -> Dom.element -> string -> Hole.handler
+val handler_hole : Dom.element -> string -> Hole.handler
 val set_handler : Hole.handler -> (Dom.event -> unit) -> unit
 val text_at : Template.position -> Dom.text
-val put_text : scope -> int -> Dom.text -> string -> unit
-val put_sole_text : scope -> int -> Dom.element -> string -> unit
-val put_attr : scope -> int -> Dom.element -> string -> string option -> unit
-val listen : scope -> Dom.element -> string -> unit
+val put_text : input -> Dom.text -> string -> unit
+
+val write_sole_text : Dom.element -> string -> unit
+val put_sole_text : input -> Dom.element -> string -> unit
+val write_attr : Dom.element -> string -> string option -> unit
+val put_attr : input -> Dom.element -> string -> string option -> unit
 
 (** The property a delegated handler for an event is kept in, the same for every element. *)
 val event_key : string -> string
@@ -189,11 +206,14 @@ type ('data, 'dispatch) link
 
 val link : ('data -> 'dispatch -> Dom.event -> unit[@u]) -> ('data, 'dispatch) link
 val put_linked : Dom.element -> string -> ('data, 'dispatch) link -> 'dispatch -> 'data -> unit
-val reference_hole : scope -> Dom.element -> Hole.reference
+val reference_hole : Dom.element -> Hole.reference
+val place_reference : Hole.reference -> unit
+val release_reference : Hole.reference -> unit
 (** [set_reference hole identity callback]: a ref whose identity is not the one held replaces it, the
     old one called with null and the new one with the element, as React compares its refs. *)
 val set_reference : Hole.reference -> 'identity -> (Dom.element Js.nullable -> unit) -> unit
-val content_hole : scope -> Template.position -> Hole.content
+val content_hole : Template.position -> Hole.content
+val release_content : Hole.content -> unit
 val set_content : Hole.content -> child -> unit
 
 type mounted
@@ -211,7 +231,7 @@ val adopt_text : cursor -> string -> Dom.text
 (** What follows a content hole in its template: whatever comes next, or an anchor the hole ends at. *)
 type ending = Before_next | Before_anchor
 
-val adopt_content : scope -> cursor -> child -> ending -> Hole.content
+val adopt_content : cursor -> child -> ending -> Hole.content
 val adopt_finish : cursor -> unit
 val collected : Hole.content -> child
 val collected_text : Dom.text -> string

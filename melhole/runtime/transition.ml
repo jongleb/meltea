@@ -10,8 +10,6 @@ type motion = Still | Sliding
 (** A mounted wrapper: what it shows, and the elements still leaving. *)
 type shown = { name : string; motion : motion; mutable inner : View.live; mutable leaving : Dom.element list }
 
-type View.hosted += Transitioned of shown
-
 (** A set of nodes, compared physically. *)
 type nodes
 
@@ -128,31 +126,31 @@ let run ~name ~duration phase element ~finish =
                   in
                   ignore (Js.Promise.catch settle (Js.Promise.then_ settle (all (Array.map finished running)))))))
 
+let transitioned =
+  View.hosting
+    ~visit:(fun [@u] shown visit -> View.visit shown.inner visit)
+    ~first:(fun [@u] shown after -> View.front shown.inner after)
+    ~let_go:(fun [@u] shown ->
+      List.iter
+        (fun leaving ->
+          stop leaving;
+          Option.iter (fun parent -> Dom_api.remove_child parent leaving) (Dom_api.parent_node leaving))
+        shown.leaving;
+      shown.leaving <- [];
+      View.release shown.inner)
+
 let transition motion ~name ?duration child =
   let element node = match Dom_api.node_type node with 1 -> Some (Dom_api.unsafe_element node) | _ -> None in
   let top live =
     let found = ref [] in
-    live.View.each (fun [@u] node -> found := node :: !found) [@u];
+    View.visit live (fun [@u] node -> found := node :: !found);
     Array.of_list (List.rev !found)
   in
-  let wrap shown =
-    View.live (Transitioned shown)
-      ~each:(fun [@u] visit -> shown.inner.each visit [@u])
-      ~front:(fun [@u] after -> shown.inner.front after [@u])
-      ~release:(fun [@u] () ->
-        List.iter
-          (fun leaving ->
-            stop leaving;
-            Option.iter (fun parent -> Dom_api.remove_child parent leaving) (Dom_api.parent_node leaving))
-          shown.leaving;
-        shown.leaving <- [];
-        shown.inner.release () [@u])
-  in
   View.host
-    ~build:(fun [@u] position -> wrap { name; motion; inner = View.build child position; leaving = [] })
+    ~build:(fun [@u] position -> View.live transitioned { name; motion; inner = View.build child position; leaving = [] })
     ~patch:(fun [@u] (position : Template.position) live ->
-      match View.hosted live with
-      | Some (Transitioned shown) when String.equal shown.name name && shown.motion == motion ->
+      match View.hosted transitioned live with
+      | Some shown when String.equal shown.name name && shown.motion == motion ->
           let placed node =
             match Js.Null.toOption node with
             | None -> Some node

@@ -19,6 +19,10 @@ val key_of : string -> string
     bubbles, on the element otherwise. *)
 val register : Dom.element -> string -> registration
 
+val listen : Dom.element -> string -> unit
+
+val unlisten : Dom.element -> string -> unit
+
 val set : Dom.element -> string -> (Dom.event -> unit) -> unit
 
 (** The property under which a controlled element keeps what puts its value back after input. *)

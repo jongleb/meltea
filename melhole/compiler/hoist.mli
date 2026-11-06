@@ -2,5 +2,7 @@
 
 val hoist : loc:Ppxlib.location -> string -> Ppxlib.expression -> Ppxlib.expression
 
+val declare : loc:Ppxlib.location -> string -> (string -> Ppxlib.type_declaration) -> string
+
 val structure :
   (Ppxlib.structure_item -> Ppxlib.structure_item) -> Ppxlib.structure -> Ppxlib.structure

@@ -27,14 +27,18 @@ let key_of event =
 
 let controlled = "$$melhole:controlled"
 
+let delegation event =
+  match event with
+  | "beforeinput" | "change" | "click" | "dblclick" | "contextmenu" | "focusin" | "focusout" | "input"
+  | "keydown" | "keyup" | "mousedown" | "mousemove" | "mouseout" | "mouseover" | "mouseup" | "pointerdown"
+  | "pointermove" | "pointerout" | "pointerover" | "pointerup" | "touchend" | "touchmove" | "touchstart" ->
+      `Delegated
+  | _ -> `Direct
+
 let register element event =
   let key = key_of event in
-  match event with
-    | "beforeinput" | "change" | "click" | "dblclick" | "contextmenu" | "focusin"
-    | "focusout" | "input" | "keydown" | "keyup" | "mousedown" | "mousemove"
-    | "mouseout" | "mouseover" | "mouseup" | "pointerdown" | "pointermove"
-    | "pointerout" | "pointerover" | "pointerup" | "touchend" | "touchmove"
-    | "touchstart" ->
+  match delegation event with
+    | `Delegated ->
         (match List.assoc_opt event !deliveries with
         | Some _ -> ()
         | None ->
@@ -71,7 +75,7 @@ let register element event =
             deliveries := (event, deliver) :: !deliveries;
             Dom_api.add_document_listener Dom_api.document event deliver);
         Delegated
-    | _ ->
+    | `Direct ->
         let listener native =
           Option.iter (fun handle -> paced event handle native) (Dom_api.handler (Dom_api.to_node element) key)
         in
@@ -79,6 +83,29 @@ let register element event =
         Direct (fun () -> Dom_api.remove_listener element event listener)
 
 let set element key handler = Dom_api.set_handler element key handler
+
+let removals = ref []
+
+let removal_of event =
+  match List.find_map (fun (known, key) -> if String.equal known event then Some key else None) !removals with
+  | Some key -> key
+  | None ->
+      let key = "$$melhole:off:" ^ event in
+      removals := (event, key) :: !removals;
+      key
+
+let listen element event =
+  match register element event with
+  | Delegated -> ()
+  | Direct remove -> Dom_api.set_property element (removal_of event) remove
+
+let unlisten element event =
+  match delegation event with
+  | `Delegated -> ()
+  | `Direct ->
+      Option.iter
+        (fun remove -> remove ())
+        (Js.Undefined.toOption (Dom_api.property element (removal_of event) : (unit -> unit) Js.undefined))
 
 external early : (unit -> (Dom.event * string Js.undefined * bool Js.undefined) array) Js.undefined
   = "__melhole_early"

@@ -4,26 +4,37 @@ type input = Input : 'a -> input [@@unboxed]
 (** Whether a value differs from the one remembered for it. *)
 type change = Changed | Unchanged
 
-(** Whether a template's root is in the document yet. *)
-type placement = Detached | Placed
-
-(** A mounted template: the values its refresh last read, what to release, which refs to call. *)
-type scope = {
-  deps : input array;
-  mutable cleanups : (unit -> unit[@u]) list;  (** Newest first. *)
-  mutable references : (unit -> unit[@u]) list;  (** Called once the root is placed. *)
-  mutable placement : placement;
+(** What a compiled template's frame needs at the moments only the runtime sees; [None] for nothing. *)
+type 'frame duties = {
+  placed : ('frame -> unit[@u]) option;  (** Once its root is in the document. *)
+  released : ('frame -> unit[@u]) option;  (** When it goes. *)
+  forgotten : ('frame -> unit[@u]) option;  (** After a render that threw halfway: every hole is written again. *)
 }
 
-(** What a library that mounts its own kind of child keeps in it. *)
-type hosted = ..
+(** A compiled template: its markup and how to make the frame of a fresh clone. *)
+type 'frame template = {
+  markup : Template.t;
+  make : (Dom.node -> 'frame[@u]);
+  duties : 'frame duties;
+  witness : 'frame Witness.t;  (** Proves that frames made by this template have its type. *)
+  adopt : 'frame adoptable;
+}
 
-(** A mounted row of a compiled loop: its root, scope and holes, and the witness of their type. *)
-type mounted_row =
-  | Mounted_row : { root : Dom.element; scope : scope; holes : 'holes; witness : 'holes Witness.t } -> mounted_row
+(** How a compiled template takes over a server's nodes: given its frame on a first, unplaced
+    clone, it makes its frame on the server's element. *)
+and 'frame adoptable = Not_hydratable | Adopts of (Dom.node -> 'frame -> 'frame[@u])
 
-(** What a mounted child is, so that the next child can tell whether it can patch it. *)
-type state =
+(** How a library's kind of child reaches its nodes, made once per kind. *)
+type 'value hosting = {
+  visit : ('value -> (Dom.node -> unit[@u]) -> unit[@u]);  (** Visits the top-level nodes in document order. *)
+  first : ('value -> Dom.node Js.null -> Dom.node Js.null[@u]);  (** The first node, or the given one. *)
+  let_go : ('value -> unit[@u]);  (** Releases handlers, effects and portals; the nodes stay. *)
+  kind : 'value Witness.t;
+}
+
+(** A mounted child: what it is, so that the next child can tell whether it can patch it, and what
+    it holds. *)
+type live =
   | Empty_state
   | Text_state of { node : Dom.text; mutable value : string }
   | List_state of live array
@@ -33,10 +44,11 @@ type state =
   | Pure_state of { identity : input; inputs : input array; inner : live }
       (** A function of its inputs; another identity is another kind of child. *)
   | Portal_state of Dom.element * live
-  | Compiled_state of { identity : input; scope : scope; lend : (unit -> unit[@u]) }
-  | Static_state of Template.t
-  | Paths_state of Template.t * (hole array -> unit)  (** Writes the next values to its holes. *)
-  | Hosted of hosted
+  | Compiled_state : { template : 'frame template; frame : 'frame; root : Dom.element } -> live
+  | Static_state of Template.t * Dom.element
+  | Paths_state of { markup : Template.t; root : Dom.element; write : hole array -> unit; release : unit -> unit }
+      (** Writes the next values to its holes. *)
+  | Hosted : 'value hosting * 'value -> live
   | Each_state : {
       items : 'item array;
       keys : string array;
@@ -44,23 +56,17 @@ type state =
       projections : input array;  (** Row after row, the parts of its rendering that read [outer]. *)
       lives : live array;
     }
-      -> state
+      -> live
   | Rows_state : {
+      template : 'frame template;
+      root : ('frame -> Dom.element[@u]);
       items : 'item array;
       keys : string array;
       outer : input array;
       projections : input array;
-      rows : mounted_row array;
+      frames : 'frame array;
     }
-      -> state
-
-(** A mounted child: its own nodes and how to let go of what they hold. *)
-and live = {
-  state : state;
-  each : ((Dom.node -> unit[@u]) -> unit[@u]);  (** Visits the top-level nodes in document order. *)
-  front : (Dom.node Js.null -> Dom.node Js.null[@u]);  (** The first node, or the given one. *)
-  release : (unit -> unit[@u]);  (** Releases handlers, effects and portals; the nodes stay. *)
-}
+      -> live
 
 (** How a child takes part in [list] and [items]. *)
 and shape =
@@ -88,29 +94,58 @@ and hole =
   | HRef of (Dom.element Js.nullable -> unit)
   | HChild of child
 
-(** A compiled template: its markup and how to make its holes on a fresh clone. *)
-type 'holes template = {
-  markup : Template.t;
-  holes : (scope -> Dom.node -> 'holes[@u]);
-  mutable lent : 'holes option;  (** The holes of a mounted clone, handed over to one refresh. *)
-  witness : 'holes Witness.t;  (** Proves that holes made by this template have its type. *)
-  adopt : 'holes adoptable;
-}
-
-(** How a compiled template takes over a server's nodes: given its holes on a first, unplaced
-    clone, it makes its holes on the server's element. *)
-and 'holes adoptable = Not_hydratable | Adopts of (scope -> Dom.node -> 'holes -> 'holes[@u])
-
-(** One row of a compiled loop before it is mounted: its template, how to write its holes, its key. *)
-
 type mounted = {
   position : Template.position;
   mutable source : child;
   mutable live : live;
 }
 
-let nothing =
-  { state = Empty_state; each = (fun [@u] _ -> ()); front = (fun [@u] after -> after); release = (fun [@u] () -> ()) }
+let nothing = Empty_state
+
+let rec visit live see =
+  match live with
+  | Empty_state | Portal_state _ -> ()
+  | Text_state { node; _ } -> see (Dom_api.to_node node) [@u]
+  | List_state lives | Keyed_state (_, lives) | Each_state { lives; _ } -> Array.iter (fun live -> visit live see) lives
+  | Memo_state (_, inner) | One_keyed_state (_, inner) | Pure_state { inner; _ } -> visit inner see
+  | Compiled_state { root; _ } | Static_state (_, root) | Paths_state { root; _ } -> see (Dom_api.to_node root) [@u]
+  | Hosted (hosting, value) -> hosting.visit value see [@u]
+  | Rows_state { frames; root; _ } -> Array.iter (fun frame -> see (Dom_api.to_node (root frame [@u])) [@u]) frames
+
+let rec front live after =
+  match live with
+  | Empty_state | Portal_state _ -> after
+  | Text_state { node; _ } -> Js.Null.return (Dom_api.to_node node)
+  | List_state lives | Keyed_state (_, lives) | Each_state { lives; _ } ->
+      let rec first index =
+        match index = Array.length lives with
+        | true -> after
+        | false ->
+            let found = front (Array.unsafe_get lives index) Js.null in
+            if Dom_api.same found Js.null then first (index + 1) else found
+      in
+      first 0
+  | Memo_state (_, inner) | One_keyed_state (_, inner) | Pure_state { inner; _ } -> front inner after
+  | Compiled_state { root; _ } | Static_state (_, root) | Paths_state { root; _ } -> Js.Null.return (Dom_api.to_node root)
+  | Hosted (hosting, value) -> hosting.first value after [@u]
+  | Rows_state { frames; root; _ } -> (
+      match Array.length frames with
+      | 0 -> after
+      | _ -> Js.Null.return (Dom_api.to_node (root (Array.unsafe_get frames 0) [@u])))
+
+let rec release live =
+  match live with
+  | Empty_state | Text_state _ | Static_state _ -> ()
+  | List_state lives | Keyed_state (_, lives) | Each_state { lives; _ } -> Array.iter release lives
+  | Memo_state (_, inner) | One_keyed_state (_, inner) | Pure_state { inner; _ } -> release inner
+  | Portal_state (container, inner) ->
+      visit inner (fun [@u] node -> Dom_api.remove_child (Dom_api.to_node container) node);
+      release inner
+  | Compiled_state { template; frame; _ } -> Option.iter (fun released -> released frame [@u]) template.duties.released
+  | Paths_state { release; _ } -> release ()
+  | Hosted (hosting, value) -> hosting.let_go value [@u]
+  | Rows_state { template; frames; _ } ->
+      Option.iter (fun released -> Array.iter (fun frame -> released frame [@u]) frames) template.duties.released
 
 let insert (position : Template.position) node =
   Dom_api.insert_before position.parent node position.before
@@ -125,7 +160,10 @@ let move parent node before =
       try move_before parent node before with Js.Exn.Error _ -> Dom_api.insert_before parent node before)
 
 (** Whether a content hole shows its children, or only remembers them for hydration's first pass. *)
-type range = Settled | Collecting
+type range = Settled | Collecting of collecting
+
+(** The children a collecting content hole was last given. *)
+and collecting = { mutable given : child }
 
 (** Where a medium's nodes come from. *)
 type adoption = Fresh_nodes | Server_nodes
@@ -175,8 +213,8 @@ let browser =
 let medium = ref browser
 
 let remove (position : Template.position) live =
-  live.each (fun [@u] node -> Dom_api.remove_child position.parent node) [@u];
-  live.release () [@u]
+  visit live (fun [@u] node -> Dom_api.remove_child position.parent node);
+  release live
 
 (** Whether a live child's nodes are all the children of its parent. *)
 type extent = Whole | Part
@@ -191,7 +229,7 @@ let extent (position : Template.position) first last =
 
 let last_of live =
   let last = ref Js.null in
-  live.each (fun [@u] node -> last := Js.Null.return node) [@u];
+  visit live (fun [@u] node -> last := Js.Null.return node);
   !last
 
 let rec last_among lives index =
@@ -204,17 +242,17 @@ let rec last_among lives index =
 let spanned position live lives dropped =
   let count = Array.length lives in
   match Array.length dropped - count with
-  | 0 when count > 0 -> extent position (live.front Js.null [@u]) (last_among lives (count - 1))
+  | 0 when count > 0 -> extent position (front live Js.null) (last_among lives (count - 1))
   | _ -> Part
 
 let update position live child =
   match child.patch position live [@u] with
   | Some next -> next
   | None -> (
-      match extent position (live.front Js.null [@u]) (last_of live) with
+      match extent position (front live Js.null) (last_of live) with
       | Whole ->
           Dom_api.set_text_content position.parent "";
-          live.release () [@u];
+          release live;
           child.build position [@u]
       | Part ->
           let next = child.build position [@u] in
@@ -246,23 +284,6 @@ let remember memory inputs compute =
       memory.kept <- Some value;
       value
 
-let group state items =
-  {
-    state;
-    each = (fun [@u] visit -> Array.iter (fun item -> item.each visit [@u]) items);
-    front =
-      (fun [@u] after ->
-        let rec first index =
-          match index = Array.length items with
-          | true -> after
-          | false ->
-              let found = (Array.unsafe_get items index).front Js.null [@u] in
-              if Dom_api.same found Js.null then first (index + 1) else found
-        in
-        first 0);
-    release = (fun [@u] () -> Array.iter (fun item -> item.release () [@u]) items);
-  }
-
 let backwards count (position : Template.position) make front =
   match count with
   | 0 -> [||]
@@ -278,13 +299,11 @@ let backwards count (position : Template.position) make front =
       fill (count - 2) (front last position.before [@u]);
       result
 
-let front_of = fun [@u] (live : live) after -> live.front after [@u]
+let front_of = fun [@u] live after -> front live after
 
 let after_of =
- fun [@u] (live : live) start ->
-  let last = ref Js.null in
-  live.each (fun [@u] node -> last := Js.Null.return node) [@u];
-  match Js.Null.toOption !last with None -> start | Some node -> Dom_api.following_sibling node
+ fun [@u] live start ->
+  match Js.Null.toOption (last_of live) with None -> start | Some node -> Dom_api.following_sibling node
 
 let text value =
   {
@@ -292,15 +311,10 @@ let text value =
     build =
       (fun [@u] position ->
         let node = !medium.text position (Some value) [@u] in
-        {
-          state = Text_state { node; value };
-          each = (fun [@u] visit -> visit (Dom_api.to_node node) [@u]);
-          front = (fun [@u] _ -> Js.Null.return (Dom_api.to_node node));
-          release = (fun [@u] () -> ());
-        });
+        Text_state { node; value });
     patch =
       (fun [@u] _ live ->
-        match live.state with
+        match live with
         | Text_state site ->
             if not (Dom_api.same site.value value) then (
               Dom_api.set_data site.node value;
@@ -313,7 +327,7 @@ let empty =
   {
     shape = Nothing;
     build = (fun [@u] _ -> nothing);
-    patch = (fun [@u] _ live -> match live.state with Empty_state -> Some live | _ -> None);
+    patch = (fun [@u] _ live -> match live with Empty_state -> Some live | _ -> None);
   }
 
 let many children =
@@ -323,10 +337,10 @@ let many children =
       (fun [@u] position ->
         let children = Array.of_list children in
         let items = !medium.built (Array.length children) position (fun [@u] index at -> (Array.unsafe_get children index).build at [@u]) after_of [@u] in
-        group (List_state items) items);
+        List_state items);
     patch =
       (fun [@u] position live ->
-        match live.state with
+        match live with
         | List_state items ->
             let children = Array.of_list children in
             let old_count = Array.length items in
@@ -339,7 +353,7 @@ let many children =
                   else (Array.unsafe_get children i).build at [@u])
                 front_of
             in
-            Some (group (List_state items) items)
+            Some (List_state items)
         | _ -> None);
   }
 
@@ -351,16 +365,16 @@ let keyed entries =
     build =
       (fun [@u] position ->
         let items = !medium.built (Array.length children) position (fun [@u] index at -> (Array.unsafe_get children index).build at [@u]) after_of [@u] in
-        group (Keyed_state (keys, items)) items);
+        Keyed_state (keys, items));
     patch =
       (fun [@u] position live ->
-        match live.state with
+        match live with
         | Keyed_state (old_keys, items) ->
             let plan = Reconcile.plan ~old:old_keys ~next:keys in
             (match spanned position live items plan.dropped with
             | Whole ->
                 Dom_api.set_text_content position.parent "";
-                live.release () [@u]
+                release live
             | Part -> Array.iter (fun i -> remove position (Array.unsafe_get items i)) plan.dropped);
             let items =
               backwards (Array.length children) position (fun [@u] j at ->
@@ -370,22 +384,22 @@ let keyed entries =
                   | Some i, _ -> update at (Array.unsafe_get items i) (Array.unsafe_get children j)
                   | None, Some i ->
                       let live = update at (Array.unsafe_get items i) (Array.unsafe_get children j) in
-                      live.each (fun [@u] node -> move at.parent node at.before) [@u];
+                      visit live (fun [@u] node -> move at.parent node at.before);
                       live)
                 front_of
             in
-            Some (group (Keyed_state (keys, items)) items)
+            Some (Keyed_state (keys, items))
         | _ -> None);
   }
 
 let with_key key child =
-  let keep inner = { inner with state = One_keyed_state (key, inner) } in
+  let keep inner = One_keyed_state (key, inner) in
   {
     shape = Entry (key, child);
     build = (fun [@u] position -> keep (child.build position [@u]));
     patch =
       (fun [@u] position live ->
-        match live.state with
+        match live with
         | One_keyed_state (shown, inner) when String.equal shown key -> Option.map keep (child.patch position inner [@u])
         | _ -> None);
   }
@@ -407,6 +421,8 @@ end = struct
 end
 
 let unset = Input (ref ())
+let no_inputs : input array = [||]
+let no_keys : string array = [||]
 
 let piece_change flat at scratch pieces =
   let rec scan index =
@@ -438,7 +454,7 @@ let each numbering items render project pieces outer =
     shape = Single;
     build =
       (fun [@u] position ->
-        let keys = Array.make count "" in
+        let keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
         let lives =
           !medium.built count position
             (fun [@u] index at ->
@@ -447,14 +463,14 @@ let each numbering items render project pieces outer =
               child.build at [@u])
             after_of [@u]
         in
-        let projections = Array.make (count * pieces) unset in
+        let projections = (match count * pieces with 0 -> no_inputs | size -> Array.make size unset) in
         for index = 0 to count - 1 do
           project (Array.unsafe_get items index) index projections (index * pieces) [@u]
         done;
-        group (Each_state { items; keys; outer; projections; lives }) lives);
+        Each_state { items; keys; outer; projections; lives });
     patch =
       (fun [@u] position live ->
-        match live.state with
+        match live with
         | Each_state old -> (
             let old_count = Array.length old.items in
             let outer_change = compare_inputs old.outer outer in
@@ -464,7 +480,7 @@ let each numbering items render project pieces outer =
                 match index = count with
                 | true -> position.before
                 | false ->
-                    let found = (Array.unsafe_get lives index).front Js.null [@u] in
+                    let found = front (Array.unsafe_get lives index) Js.null in
                     if Dom_api.same found Js.null then find (index + 1) else found
               in
               find index
@@ -516,11 +532,11 @@ let each numbering items render project pieces outer =
                                (Array.unsafe_get lives index)
                                (fst (rendered index item))))
                 done;
-                Some (group (Each_state { items; keys = old.keys; outer; projections; lives }) lives)
+                Some (Each_state { items; keys = old.keys; outer; projections; lives })
             | None ->
             let origins = Array.make count Origin.fresh and made = Array.make count None in
-            let keys = Array.make count "" in
-            let projections = Array.make (count * pieces) unset in
+            let keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
+            let projections = (match count * pieces with 0 -> no_inputs | size -> Array.make size unset) in
             let shift = ref 0 in
             Array.iteri
               (fun index item ->
@@ -577,7 +593,7 @@ let each numbering items render project pieces outer =
                   match index = count with
                   | true -> position.before
                   | false ->
-                      let found = (Array.unsafe_get lives index).front Js.null [@u] in
+                      let found = front (Array.unsafe_get lives index) Js.null in
                       if Dom_api.same found Js.null then ahead (index + 1) else found
                 in
                 let rec refresh index =
@@ -593,13 +609,13 @@ let each numbering items render project pieces outer =
                     refresh (index - 1))
                 in
                 refresh (count - 1);
-                Some (group (Each_state { items; keys; outer; projections; lives }) lives)
+                Some (Each_state { items; keys; outer; projections; lives })
             | _, (`Same | `Moved) ->
                 let plan = Reconcile.plan ~old:old.keys ~next:keys in
                 (match spanned position live old.lives plan.dropped with
                 | Whole ->
                     Dom_api.set_text_content position.parent "";
-                    live.release () [@u]
+                    release live
                 | Part -> Array.iter (fun i -> remove position (Array.unsafe_get old.lives i)) plan.dropped);
                 let carried at i j =
                   match Origin.kept_from (Array.unsafe_get origins j) with
@@ -614,11 +630,11 @@ let each numbering items render project pieces outer =
                       | Some i, _ -> carried at i j
                       | None, Some i ->
                           let live = carried at i j in
-                          live.each (fun [@u] node -> move at.parent node at.before) [@u];
+                          visit live (fun [@u] node -> move at.parent node at.before);
                           live)
                     front_of
                 in
-                Some (group (Each_state { items; keys; outer; projections; lives }) lives)))
+                Some (Each_state { items; keys; outer; projections; lives })))
         | _ -> None);
   }
 
@@ -642,13 +658,13 @@ let rec items child =
   | Single | Entry _ -> [ child ]
 
 let memo inputs render =
-  let skipping inner = { inner with state = Memo_state (inputs, inner) } in
+  let skipping inner = Memo_state (inputs, inner) in
   {
     shape = Deferred render;
     build = (fun [@u] position -> skipping ((render ()).build position [@u]));
     patch =
       (fun [@u] position live ->
-        match live.state with
+        match live with
         | Memo_state (old, inner) -> (
             match compare_inputs old inputs with
             | Unchanged -> Some live
@@ -657,13 +673,13 @@ let memo inputs render =
   }
 
 let pure identity inputs render =
-  let named inner = { inner with state = Pure_state { identity = Input identity; inputs; inner } } in
+  let named inner = Pure_state { identity = Input identity; inputs; inner } in
   {
     shape = Single;
     build = (fun [@u] position -> named ((render ()).build position [@u]));
     patch =
       (fun [@u] position live ->
-        match live.state with
+        match live with
         | Pure_state old -> (
             let (Input known) = old.identity in
             match (Dom_api.same known identity, compare_inputs old.inputs inputs) with
@@ -678,53 +694,25 @@ let lazy2 render a b = memo [| Input render; Input a; Input b |] (fun () -> rend
 
 let portal container child =
   let inside = { Template.parent = Dom_api.to_node container; before = Js.null } in
-  let held inner =
-    {
-      state = Portal_state (container, inner);
-      each = (fun [@u] _ -> ());
-      front = (fun [@u] after -> after);
-      release =
-        (fun [@u] () ->
-          inner.each (fun [@u] node -> Dom_api.remove_child (Dom_api.to_node container) node) [@u];
-          inner.release () [@u]);
-    }
-  in
   {
     shape = Single;
     build =
-      (fun [@u] _ -> held (!medium.aside (fun [@u] () -> child.build inside [@u]) [@u]));
+      (fun [@u] _ -> Portal_state (container, !medium.aside (fun [@u] () -> child.build inside [@u]) [@u]));
     patch =
       (fun [@u] _ live ->
-        match live.state with
+        match live with
         | Portal_state (target, inner) when Dom_api.same target container ->
-            Some (held (update inside inner child))
+            Some (Portal_state (container, update inside inner child))
         | _ -> None);
   }
 
-let settle position root scope =
+let placed position root template frame =
   !medium.placed position root [@u];
-  scope.placement <- Placed;
-  List.iter (fun reference -> reference () [@u]) (List.rev scope.references)
+  Option.iter (fun placed -> placed frame [@u]) template.duties.placed
 
-let let_go scope =
-  match scope.cleanups with
-  | [] -> ()
-  | cleanups -> List.iter (fun cleanup -> cleanup () [@u]) (List.rev cleanups)
+let template markup make duties = { markup; make; duties; witness = Witness.make (); adopt = Not_hydratable }
 
-let place position root scope state =
-  settle position root scope;
-  {
-    state;
-    each = (fun [@u] visit -> visit (Dom_api.to_node root) [@u]);
-    front = (fun [@u] _ -> Js.Null.return (Dom_api.to_node root));
-    release = (fun [@u] () -> let_go scope);
-  }
-
-let fresh count = { deps = Array.make count unset; cleanups = []; references = []; placement = Detached }
-
-let template markup holes = { markup; holes; lent = None; witness = Witness.make (); adopt = Not_hydratable }
-
-let hydratable markup holes adopt = { markup; holes; lent = None; witness = Witness.make (); adopt = Adopts adopt }
+let hydratable markup make duties adopt = { markup; make; duties; witness = Witness.make (); adopt = Adopts adopt }
 
 let mismatch () = Js.Exn.raiseError "melhole: the HTML from the server does not match the view"
 
@@ -740,71 +728,51 @@ let found node =
 let expected what node =
   Js.Exn.raiseError ("melhole: the HTML from the server does not match the view: expected " ^ what ^ ", found " ^ found node)
 
-let collecting = { browser with opened = (fun [@u] _ -> Collecting) }
+let collecting = { browser with opened = (fun [@u] _ -> Collecting { given = empty }) }
 
-let adopted template slots refresh (position : Template.position) =
+let adopted template refresh (position : Template.position) =
   match template.adopt with
   | Not_hydratable -> mismatch ()
   | Adopts adopt ->
       let root = !medium.root position template.markup [@u] in
       let serving = !medium in
       medium := collecting;
-      let clone = Template.clone template.markup in
-      let first = fresh slots in
-      let collected = template.holes first (Dom_api.to_node clone) [@u] in
-      refresh first collected [@u];
+      let collected = template.make (Dom_api.to_node (Template.clone template.markup)) [@u] in
+      refresh collected [@u];
       medium := serving;
-      let scope = fresh slots in
-      let holes = adopt scope (Dom_api.to_node root) collected [@u] in
-      refresh scope holes [@u];
-      (root, scope, holes)
+      let frame = adopt (Dom_api.to_node root) collected [@u] in
+      refresh frame [@u];
+      (root, frame)
 
-let rows (type holes item) (items : item array) (template : holes template) slots
-    (refresh : (scope -> holes -> item -> unit)[@u]) (key : (item -> string)[@u]) project pieces outer =
+let rows (type frame item) (items : item array) (template : frame template) (root : (frame -> Dom.element)[@u])
+    (refresh : (frame -> item -> unit)[@u]) (key : (item -> string)[@u]) project pieces outer =
   let count = Array.length items in
   let mount (position : Template.position) item =
-    match !medium.adoption with
-    | Fresh_nodes ->
-        let root = !medium.root position template.markup [@u] in
-        let scope = fresh slots in
-        let holes = template.holes scope (Dom_api.to_node root) [@u] in
-        refresh scope holes item [@u];
-        settle position root scope;
-        Mounted_row { root; scope; holes; witness = template.witness }
-    | Server_nodes ->
-        let root, scope, holes =
-          adopted template slots (fun [@u] scope holes -> refresh scope holes item [@u]) position
-        in
-        settle position root scope;
-        Mounted_row { root; scope; holes; witness = template.witness }
+    let made, frame =
+      match !medium.adoption with
+      | Fresh_nodes ->
+          let made = !medium.root position template.markup [@u] in
+          let frame = template.make (Dom_api.to_node made) [@u] in
+          refresh frame item [@u];
+          (made, frame)
+      | Server_nodes -> adopted template (fun [@u] frame -> refresh frame item [@u]) position
+    in
+    placed position made template frame;
+    frame
   in
-  let root_of (Mounted_row row) = Dom_api.to_node row.root in
-  let after = fun [@u] row _ -> Dom_api.following_sibling (root_of row) in
-  let shown items keys projections rows =
-    {
-      state = Rows_state { items; keys; outer; projections; rows };
-      each = (fun [@u] visit -> Array.iter (fun row -> visit (root_of row) [@u]) rows);
-      front =
-        (fun [@u] after ->
-          match Array.length rows with 0 -> after | _ -> Js.Null.return (root_of (Array.unsafe_get rows 0)));
-      release =
-        (fun [@u] () ->
-          for index = 0 to Array.length rows - 1 do
-            let (Mounted_row row) = Array.unsafe_get rows index in
-            let_go row.scope
-          done);
-    }
-  in
-  let drop (position : Template.position) (Mounted_row row) =
-    Dom_api.remove_child position.parent row.root;
-    let_go row.scope
+  let root_of frame = Dom_api.to_node (root frame [@u]) in
+  let after = fun [@u] frame _ -> Dom_api.following_sibling (root_of frame) in
+  let shown items keys projections frames = Rows_state { template; root; items; keys; outer; projections; frames } in
+  let drop (position : Template.position) frame =
+    Dom_api.remove_child position.parent (root_of frame);
+    Option.iter (fun released -> released frame [@u]) template.duties.released
   in
   {
     shape = Single;
     build =
       (fun [@u] position ->
-        let keys = Array.make count "" in
-        let rows =
+        let keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
+        let frames =
           !medium.built count position
             (fun [@u] index at ->
               let item = Array.unsafe_get items index in
@@ -812,30 +780,25 @@ let rows (type holes item) (items : item array) (template : holes template) slot
               mount at item)
             after [@u]
         in
-        let projections = Array.make (count * pieces) unset in
+        let projections = (match count * pieces with 0 -> no_inputs | size -> Array.make size unset) in
         for index = 0 to count - 1 do
           project (Array.unsafe_get items index) index projections (index * pieces) [@u]
         done;
-        shown items keys projections rows);
+        shown items keys projections frames);
     patch =
       (fun [@u] position live ->
-        match live.state with
+        match live with
         | Rows_state old -> (
+            match Witness.equal old.template.witness template.witness with
+            | None -> None
+            | Some Equal ->
             let old_count = Array.length old.items in
             let outer_change = compare_inputs old.outer outer in
             let scratch = Array.make pieces unset in
             let drawn index = Array.unsafe_get items index in
-            let refreshed (Mounted_row row as mounted) item =
-              match Witness.equal row.witness template.witness with
-              | Some Equal ->
-                  refresh row.scope row.holes item [@u];
-                  mounted
-              | None ->
-                  let made =
-                    mount { position with before = Dom_api.following_sibling (Dom_api.to_node row.root) } item
-                  in
-                  drop position mounted;
-                  made
+            let refreshed frame item =
+              refresh frame item [@u];
+              frame
             in
             let rec in_place index =
               match index = count with
@@ -851,7 +814,7 @@ let rows (type holes item) (items : item array) (template : holes template) slot
             in
             match (count = old_count, match count = old_count with true -> in_place 0 | false -> `Rearranged) with
             | true, `In_place ->
-                let rows = old.rows and projections = old.projections in
+                let frames = old.frames and projections = old.projections in
                 for index = 0 to count - 1 do
                   let item = Array.unsafe_get items index and at = index * pieces in
                   match (Dom_api.same item (Array.unsafe_get old.items index), outer_change) with
@@ -862,15 +825,15 @@ let rows (type holes item) (items : item array) (template : holes template) slot
                       | Unchanged -> ()
                       | Changed ->
                           pieces_copied scratch 0 projections at pieces;
-                          Array.unsafe_set rows index (refreshed (Array.unsafe_get rows index) item))
+                          Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) item))
                   | false, _ ->
                       project item index projections at [@u];
-                      Array.unsafe_set rows index (refreshed (Array.unsafe_get rows index) item)
+                      Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) item)
                 done;
-                Some (shown items old.keys projections rows)
+                Some (shown items old.keys projections frames)
             | _, (`In_place | `Rearranged) ->
-            let next = Array.make count Origin.fresh and keys = Array.make count "" in
-            let projections = Array.make (count * pieces) unset in
+            let next = Array.make count Origin.fresh and keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
+            let projections = (match count * pieces with 0 -> no_inputs | size -> Array.make size unset) in
             let fits from item =
               from >= 0 && from < old_count
               && Dom_api.same (Array.unsafe_get old.items from) item
@@ -915,13 +878,13 @@ let rows (type holes item) (items : item array) (template : holes template) slot
             in
             (match (count = old_count, order 0) with
             | true, `Same ->
-                let rows = Array.copy old.rows in
+                let frames = Array.copy old.frames in
                 for index = 0 to count - 1 do
                   match Origin.kept_from (Array.unsafe_get next index) with
                   | Some from when from = index -> ()
-                  | Some _ | None -> Array.unsafe_set rows index (refreshed (Array.unsafe_get rows index) (drawn index))
+                  | Some _ | None -> Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) (drawn index))
                 done;
-                Some (shown items keys projections rows)
+                Some (shown items keys projections frames)
             | _, (`Same | `Moved) ->
                 let plan = Reconcile.plan ~old:old.keys ~next:keys in
                 let whole =
@@ -929,10 +892,10 @@ let rows (type holes item) (items : item array) (template : holes template) slot
                   | 0 when old_count > 0 -> (
                       match
                         ( Dom_api.same
-                            (Js.Null.return (root_of (Array.unsafe_get old.rows 0)))
+                            (Js.Null.return (root_of (Array.unsafe_get old.frames 0)))
                             (Template.first_or_end position.parent),
                           Dom_api.same
-                            (Js.Null.return (root_of (Array.unsafe_get old.rows (old_count - 1))))
+                            (Js.Null.return (root_of (Array.unsafe_get old.frames (old_count - 1))))
                             (Dom_api.last_child position.parent) )
                       with
                       | true, true -> `Whole
@@ -942,17 +905,14 @@ let rows (type holes item) (items : item array) (template : holes template) slot
                 (match whole with
                 | `Whole ->
                     Dom_api.set_text_content position.parent "";
-                    for index = 0 to old_count - 1 do
-                      let (Mounted_row row) = Array.unsafe_get old.rows index in
-                      let_go row.scope
-                    done
-                | `Part -> Array.iter (fun i -> drop position (Array.unsafe_get old.rows i)) plan.dropped);
+                    Option.iter (fun released -> Array.iter (fun frame -> released frame [@u]) old.frames) template.duties.released
+                | `Part -> Array.iter (fun i -> drop position (Array.unsafe_get old.frames i)) plan.dropped);
                 let carried i j =
                   match Origin.kept_from (Array.unsafe_get next j) with
-                  | Some from when from = i -> Array.unsafe_get old.rows i
-                  | Some _ | None -> refreshed (Array.unsafe_get old.rows i) (drawn j)
+                  | Some from when from = i -> Array.unsafe_get old.frames i
+                  | Some _ | None -> refreshed (Array.unsafe_get old.frames i) (drawn j)
                 in
-                let placed j before =
+                let settled j before =
                   let step = Array.unsafe_get plan.steps j in
                   match (Reconcile.kept step, Reconcile.moved step) with
                   | None, None -> mount { position with before } (drawn j)
@@ -962,83 +922,78 @@ let rows (type holes item) (items : item array) (template : holes template) slot
                       move position.parent (root_of moved) before;
                       moved
                 in
-                let rows =
+                let frames =
                   match count with
                   | 0 -> [||]
                   | _ ->
-                      let last = placed (count - 1) position.before in
-                      let rows = Array.make count last in
+                      let last = settled (count - 1) position.before in
+                      let frames = Array.make count last in
                       let before = ref (Js.Null.return (root_of last)) in
                       for j = count - 2 downto 0 do
-                        let row = placed j !before in
-                        Array.unsafe_set rows j row;
-                        before := Js.Null.return (root_of row)
+                        let frame = settled j !before in
+                        Array.unsafe_set frames j frame;
+                        before := Js.Null.return (root_of frame)
                       done;
-                      rows
+                      frames
                 in
-                Some (shown items keys projections rows)))
+                Some (shown items keys projections frames)))
         | _ -> None);
   }
 
 
-let compiled template count refresh =
+let compiled (type frame) (template : frame template) (refresh : (frame -> unit)[@u]) =
   {
     shape = Single;
     build =
       (fun [@u] position ->
-        let root, scope, holes =
+        let root, frame =
           match !medium.adoption with
           | Fresh_nodes ->
               let root = !medium.root position template.markup [@u] in
-              let scope = fresh count in
-              let holes = template.holes scope (Dom_api.to_node root) [@u] in
-              refresh scope holes [@u];
-              (root, scope, holes)
-          | Server_nodes -> adopted template count refresh position
+              let frame = template.make (Dom_api.to_node root) [@u] in
+              refresh frame [@u];
+              (root, frame)
+          | Server_nodes -> adopted template refresh position
         in
-        place position root scope
-          (Compiled_state
-             { identity = Input template; scope; lend = (fun [@u] () -> template.lent <- Some holes) }));
+        placed position root template frame;
+        Compiled_state { template; frame; root });
     patch =
       (fun [@u] _ live ->
-        match live.state with
-        | Compiled_state mounted ->
-            let (Input identity) = mounted.identity in
-            if Dom_api.same identity template then (
-              mounted.lend () [@u];
-              Option.iter
-                (fun holes ->
-                  template.lent <- None;
-                  refresh mounted.scope holes [@u])
-                template.lent;
-              Some live)
-            else None
+        match live with
+        | Compiled_state mounted -> (
+            match Witness.equal mounted.template.witness template.witness with
+            | Some Equal ->
+                refresh mounted.frame [@u];
+                Some live
+            | None -> None)
         | _ -> None);
   }
 
 let static markup =
   {
     shape = Single;
-    build = (fun [@u] position -> place position (!medium.root position markup [@u]) (fresh 0) (Static_state markup));
+    build =
+      (fun [@u] position ->
+        let root = !medium.root position markup [@u] in
+        !medium.placed position root [@u];
+        Static_state (markup, root));
     patch =
       (fun [@u] _ live ->
-        match live.state with
-        | Static_state shown when Dom_api.same shown markup -> Some live
+        match live with
+        | Static_state (shown, _) when Dom_api.same shown markup -> Some live
         | _ -> None);
   }
 
 let rec forget live =
-  match live.state with
-  | Compiled_state { scope; _ } -> Array.fill scope.deps 0 (Array.length scope.deps) unset
+  match live with
+  | Compiled_state { template; frame; _ } -> Option.iter (fun forgotten -> forgotten frame [@u]) template.duties.forgotten
   | One_keyed_state (_, inner) | Memo_state (_, inner) | Pure_state { inner; _ } -> forget inner
   | _ -> ()
 
-let check scope index value =
-  let (Input remembered) = Array.unsafe_get scope.deps index in
-  if Dom_api.same remembered value then Unchanged
-  else (
-    Array.unsafe_set scope.deps index (Input value);
-    Changed)
+let check (Input remembered) value = if Dom_api.same remembered value then Unchanged else Changed
+
+(** Whether a template's root is in the document yet. *)
+type placement = Detached | Placed
 
 module Hole = struct
   type text = { node : Dom.text; mutable value : string }
@@ -1050,19 +1005,14 @@ module Hole = struct
   type prop = { element : Dom.element; name : string; mutable value : input; echo : echo }
   type style = { element : Dom.element; mutable value : (string * string) list }
   type classes = { element : Dom.element; mutable value : string list }
-  type handler = { element : Dom.element; key : string }
+  type handler = { element : Dom.element; event : string; key : string }
   type reference = {
-    scope : scope;
+    mutable placement : placement;
     element : Dom.element;
     mutable identity : input;  (** What tells this ref from another, like React's ref object or function. *)
     mutable callback : Dom.element Js.nullable -> unit;
   }
-  type content = {
-    position : Template.position;
-    mutable source : child;
-    mutable live : live;
-    range : range;
-  }
+  type content = { parent : Dom.node; before : Dom.node Js.null; mutable live : live; range : range }
 end
 
 let text_hole position =
@@ -1166,43 +1116,29 @@ let set_classes (hole : Hole.classes) value =
     (match value with [] -> Dom_api.remove_attribute hole.element "class" | _ :: _ -> ());
     hole.value <- value)
 
-let handler_hole scope element event =
-  let key = Events.key_of event in
-  (match Events.register element event with
-  | Events.Delegated -> ()
-  | Events.Direct remove -> scope.cleanups <- (fun [@u] () -> remove ()) :: scope.cleanups);
-  ({ element; key } : Hole.handler)
+let handler_hole element event =
+  Events.listen element event;
+  ({ element; event; key = Events.key_of event } : Hole.handler)
 
 let set_handler (hole : Hole.handler) next = Events.set hole.element hole.key next
 
 let text_at position = !medium.text position None [@u]
 
-let put_text scope slot node value =
-  let (Input last) = Array.unsafe_get scope.deps slot in
-  if not (Dom_api.same last value) then (
-    Dom_api.set_data node value;
-    Array.unsafe_set scope.deps slot (Input value))
+let put_text (Input last) node value = if not (Dom_api.same last value) then Dom_api.set_data node value
 
-let put_sole_text scope slot element value =
-  let (Input last) = Array.unsafe_get scope.deps slot in
-  if not (Dom_api.same last value) then (
-    (match Dom_api.first_child element with
-    | Some node when Dom_api.node_type node = 3 -> Dom_api.set_data (Dom_api.unsafe_text node) value
-    | Some _ | None -> Dom_api.set_text_content (Dom_api.to_node element) value);
-    Array.unsafe_set scope.deps slot (Input value))
+let write_sole_text element value =
+  match Dom_api.first_child element with
+  | Some node when Dom_api.node_type node = 3 -> Dom_api.set_data (Dom_api.unsafe_text node) value
+  | Some _ | None -> Dom_api.set_text_content (Dom_api.to_node element) value
 
-let put_attr scope slot element name value =
-  let (Input last) = Array.unsafe_get scope.deps slot in
-  if not (Dom_api.same last value) then (
-    (match value with
-    | Some value -> Dom_api.set_attribute element name value
-    | None -> Dom_api.remove_attribute element name);
-    Array.unsafe_set scope.deps slot (Input value))
+let put_sole_text (Input last) element value = if not (Dom_api.same last value) then write_sole_text element value
 
-let listen scope element event =
-  match Events.register element event with
-  | Events.Delegated -> ()
-  | Events.Direct remove -> scope.cleanups <- (fun [@u] () -> remove ()) :: scope.cleanups
+let write_attr element name value =
+  match value with
+  | Some value -> Dom_api.set_attribute element name value
+  | None -> Dom_api.remove_attribute element name
+
+let put_attr (Input last) element name value = if not (Dom_api.same last value) then write_attr element name value
 
 let event_key event = Events.key_of event
 
@@ -1237,11 +1173,13 @@ let put_linked element key link dispatch data =
         (fun event -> link.body (Dom_api.property (Dom_api.current_target event) link.data_key) dispatch event [@u]));
   Events.set element key link.handler
 
-let reference_hole scope element =
-  let hole : Hole.reference = { scope; element; identity = unset; callback = ignore } in
-  scope.references <- (fun [@u] () -> hole.callback (Js.Nullable.return hole.element)) :: scope.references;
-  scope.cleanups <- (fun [@u] () -> hole.callback Js.Nullable.null) :: scope.cleanups;
-  hole
+let reference_hole element : Hole.reference = { placement = Detached; element; identity = unset; callback = ignore }
+
+let place_reference (hole : Hole.reference) =
+  hole.placement <- Placed;
+  hole.callback (Js.Nullable.return hole.element)
+
+let release_reference (hole : Hole.reference) = hole.callback Js.Nullable.null
 
 let set_reference (hole : Hole.reference) identity callback =
   let (Input held) = hole.identity in
@@ -1249,25 +1187,21 @@ let set_reference (hole : Hole.reference) identity callback =
     let previous = hole.callback in
     hole.identity <- Input identity;
     hole.callback <- callback;
-    match hole.scope.placement with
+    match hole.placement with
     | Placed ->
         previous Js.Nullable.null;
         callback (Js.Nullable.return hole.element)
     | Detached -> ())
 
-let content_hole scope (position : Template.position) =
-  let range = !medium.opened position [@u] in
-  let hole : Hole.content = { position; source = empty; live = nothing; range } in
-  scope.cleanups <- (fun [@u] () -> hole.live.release () [@u]) :: scope.cleanups;
-  hole
+let content_hole (position : Template.position) : Hole.content =
+  { parent = position.parent; before = position.before; live = nothing; range = !medium.opened position [@u] }
+
+let release_content (hole : Hole.content) = release hole.live
 
 let set_content (hole : Hole.content) child =
-  match (hole.range, Dom_api.same hole.source child) with
-  | Settled, true -> ()
-  | Settled, false ->
-      hole.live <- update hole.position hole.live child;
-      hole.source <- child
-  | Collecting, _ -> hole.source <- child
+  match hole.range with
+  | Settled -> hole.live <- update { parent = hole.parent; before = hole.before } hole.live child
+  | Collecting collecting -> collecting.given <- child
 
 (** Where hydration has got to among one parent's children. *)
 type cursor = { parent : Dom.node; mutable at : Dom.node Js.null }
@@ -1322,13 +1256,11 @@ let adopt_text cursor value =
 (** What follows a content hole in its template: whatever comes next, or an anchor the hole ends at. *)
 type ending = Before_next | Before_anchor
 
-let adopt_content scope cursor child ending =
+let adopt_content cursor child ending : Hole.content =
   let live = child.build { Template.parent = cursor.parent; before = cursor.at } [@u] in
   cursor.at <- after_of live cursor.at [@u];
   let before = match ending with Before_next -> cursor.at | Before_anchor -> Js.Null.return (anchor cursor) in
-  let hole : Hole.content = { position = { parent = cursor.parent; before }; source = child; live; range = Settled } in
-  scope.cleanups <- (fun [@u] () -> hole.live.release () [@u]) :: scope.cleanups;
-  hole
+  { parent = cursor.parent; before; live; range = Settled }
 
 let adopt_finish cursor =
   let rec rest node =
@@ -1341,7 +1273,8 @@ let adopt_finish cursor =
   in
   rest cursor.at
 
-let collected (hole : Hole.content) = hole.source
+let collected (hole : Hole.content) =
+  match hole.range with Collecting collecting -> collecting.given | Settled -> mismatch ()
 let collected_text node = Dom_api.data (Dom_api.to_node node)
 
 (** A hole of a hand-written template. *)
@@ -1382,9 +1315,28 @@ let tpl_instance markup values =
             mismatch ())
       sites values
   in
+  let shown position root sites =
+    !medium.placed position root [@u];
+    Array.iter (fun site -> match site with Reference_hole hole -> place_reference hole | _ -> ()) sites;
+    Paths_state
+      {
+        markup;
+        root;
+        write = refresh sites;
+        release =
+          (fun () ->
+            Array.iter
+              (fun site ->
+                match site with
+                | Handler_hole hole -> Events.unlisten hole.element hole.event
+                | Reference_hole hole -> release_reference hole
+                | Content_hole hole -> release_content hole
+                | Text_hole _ | Attr_hole _ | Prop_hole _ | Style_hole _ | Class_hole _ -> ())
+              sites);
+      }
+  in
   let adopt_instance (position : Template.position) =
     let root = !medium.root position markup [@u] in
-    let scope = fresh 0 in
     let paths = Template.paths markup in
     let elements = ref [] in
     let adopted = Array.make (Array.length paths) None in
@@ -1392,7 +1344,7 @@ let tpl_instance markup values =
       Array.unsafe_set adopted index
         (match (Array.unsafe_get paths index, Array.unsafe_get values index) with
         | Text _, HText text -> Some (Text_hole { node = adopt_text cursor text; value = text })
-        | Child _, HChild child -> Some (Content_hole (adopt_content scope cursor child ending))
+        | Child _, HChild child -> Some (Content_hole (adopt_content cursor child ending))
         | _, _ -> mismatch ())
     in
     let rec walk shape server path =
@@ -1444,14 +1396,14 @@ let tpl_instance markup values =
           | Text _ | Child _ -> Option.get (Array.unsafe_get adopted index)
           | Attr (path, name) -> Attr_hole (attr_hole (at path) name)
           | Prop (path, name) -> Prop_hole (prop_hole (at path) name)
-          | Handler (path, event) -> Handler_hole (handler_hole scope (at path) event)
-          | Ref path -> Reference_hole (reference_hole scope (at path))
+          | Handler (path, event) -> Handler_hole (handler_hole (at path) event)
+          | Ref path -> Reference_hole (reference_hole (at path))
           | Style path -> Style_hole (style_hole (at path))
           | Class_list path -> Class_hole (classes_hole (at path)))
         paths
     in
     refresh sites values;
-    place position root scope (Paths_state (markup, refresh sites))
+    shown position root sites
   in
   {
     shape = Single;
@@ -1461,28 +1413,27 @@ let tpl_instance markup values =
         | Server_nodes -> adopt_instance position
         | Fresh_nodes ->
         let root = !medium.root position markup [@u] in
-        let scope = fresh 0 in
         let sites =
           Array.map
             (fun (site : (Dom.element, Template.position) Template.hole) ->
               match site with
               | Text at -> Text_hole (text_hole at)
-              | Child at -> Content_hole (content_hole scope at)
+              | Child at -> Content_hole (content_hole at)
               | Attr (element, name) -> Attr_hole (attr_hole element name)
               | Prop (element, name) -> Prop_hole (prop_hole element name)
-              | Handler (element, event) -> Handler_hole (handler_hole scope element event)
-              | Ref element -> Reference_hole (reference_hole scope element)
+              | Handler (element, event) -> Handler_hole (handler_hole element event)
+              | Ref element -> Reference_hole (reference_hole element)
               | Style element -> Style_hole (style_hole element)
               | Class_list element -> Class_hole (classes_hole element))
             (Template.locate markup (Dom_api.to_node root))
         in
         refresh sites values;
-        place position root scope (Paths_state (markup, refresh sites)));
+        shown position root sites);
     patch =
       (fun [@u] _ live ->
-        match live.state with
-        | Paths_state (shown, write) when Dom_api.same shown markup ->
-            write values;
+        match live with
+        | Paths_state shown when Dom_api.same shown.markup markup ->
+            shown.write values;
             Some live
         | _ -> None);
   }
@@ -1513,5 +1464,11 @@ let unmount mounted =
 
 let host ~build ~patch = { shape = Single; build; patch }
 let build child position = child.build position [@u]
-let live hosted ~each ~front ~release = { state = Hosted hosted; each; front; release }
-let hosted live = match live.state with Hosted hosted -> Some hosted | _ -> None
+let hosting ~visit ~first ~let_go = { visit; first; let_go; kind = Witness.make () }
+let live hosting value = Hosted (hosting, value)
+
+let hosted (type value) (hosting : value hosting) live : value option =
+  match live with
+  | Hosted (held, value) -> (
+      match Witness.equal held.kind hosting.kind with Some Equal -> Some value | None -> None)
+  | _ -> None
