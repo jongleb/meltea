@@ -78,18 +78,93 @@ let render child =
   tidy (Dom_api.to_node copy);
   Dom_api.inner_html copy
 
-let hydrate child ~parent =
+let adopt child ~parent =
   View.medium := following;
   match View.mount_over child ~parent with
   | mounted ->
       View.medium := View.browser;
-      Dom_api.queue_microtask (fun () -> Events.replay (Dom_api.to_node parent));
       mounted
   | exception error ->
       Js.Console.error error;
       View.medium := View.browser;
       Dom_api.set_text_content (Dom_api.to_node parent) "";
       View.mount child ~parent ~before:None
+
+let hydrate child ~parent =
+  let mounted = adopt child ~parent in
+  Dom_api.queue_microtask (fun () -> Option.iter Events.replay (Events.early (Dom_api.to_node parent)));
+  mounted
+
+(** Where a resumable page is. *)
+type state =
+  | Waiting of (unit -> unit)  (** As the server wrote it, listening for its first input. *)
+  | Due of Events.early  (** Given input before the code arrived: taken over at the next microtask. *)
+  | Taken of View.mounted
+  | Left
+
+type resumable = { child : unit -> View.child; parent : Dom.node; mutable state : state }
+
+external add_window_listener : string -> (Dom.event -> unit) -> < capture : bool > Js.t -> unit = "addEventListener"
+[@@mel.scope "window"]
+
+external remove_window_listener : string -> (Dom.event -> unit) -> < capture : bool > Js.t -> unit
+  = "removeEventListener"
+[@@mel.scope "window"]
+
+external contains : Dom.node -> Dom.node -> bool = "contains" [@@mel.send]
+
+let resumed page =
+  let take () =
+    let mounted = adopt (page.child ()) ~parent:page.parent in
+    page.state <- Taken mounted;
+    mounted
+  in
+  match page.state with
+  | Taken mounted -> mounted
+  | Left -> invalid_arg "Served.resumed: the page was let go"
+  | Waiting disarm ->
+      disarm ();
+      take ()
+  | Due early ->
+      let mounted = take () in
+      Events.replay early;
+      mounted
+
+let resumable child ~parent =
+  let parent = Dom_api.to_node parent in
+  match Events.early parent with
+  | Some early ->
+      let page = { child; parent; state = Due early } in
+      Dom_api.queue_microtask (fun () ->
+          match page.state with Due _ -> ignore (resumed page) | Waiting _ | Taken _ | Left -> ());
+      page
+  | None ->
+      let inputs = [ "click"; "dblclick"; "input"; "change"; "keydown"; "keyup"; "submit"; "pointerdown" ] in
+      let rec page = { child; parent; state = Waiting disarm }
+      and listener native =
+        Option.iter
+          (fun target ->
+            match contains parent target with
+            | true -> Events.preserving native (fun () -> ignore (resumed page))
+            | false -> ())
+          (Dom_api.target native)
+      and disarm () = List.iter (fun input -> remove_window_listener input listener [%mel.obj { capture = true }]) inputs in
+      List.iter (fun input -> add_window_listener input listener [%mel.obj { capture = true }]) inputs;
+      page
+
+let leave page =
+  match page.state with
+  | Taken mounted ->
+      page.state <- Left;
+      View.unmount mounted
+  | Waiting disarm ->
+      page.state <- Left;
+      disarm ();
+      Dom_api.set_text_content page.parent ""
+  | Due _ ->
+      page.state <- Left;
+      Dom_api.set_text_content page.parent ""
+  | Left -> ()
 
 external element_by_id : Dom.document -> string -> Dom.element Js.null = "getElementById" [@@mel.send]
 external script_text : Dom.element -> string = "textContent" [@@mel.get]

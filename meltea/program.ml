@@ -22,11 +22,25 @@ type schedule = Idle | Queued | Framed
 (** Which model a program starts from: its [init], or the model of the program running on its root. *)
 type carry = Initial | Running
 
-(** How a program takes over its root, and from which model. *)
-type start = { take : View.child -> Dom.element -> View.mounted; carry : carry }
+(** The view a program shows on its root, taken over when first asked for, and how it lets it go. *)
+type page = { shown : unit -> View.mounted; gone : unit -> unit }
 
-let mount = { take = (fun child root -> View.mount child ~parent:root ~before:None); carry = Initial }
-let hydrate = { take = (fun child root -> Served.hydrate child ~parent:root); carry = Initial }
+(** How a program takes over its root, and from which model. *)
+type start = { take : (unit -> View.child) -> Dom.element -> page; carry : carry }
+
+let held mounted = { shown = (fun () -> mounted); gone = (fun () -> View.unmount mounted) }
+let mount = { take = (fun child root -> held (View.mount (child ()) ~parent:root ~before:None)); carry = Initial }
+let hydrate = { take = (fun child root -> held (Served.hydrate (child ()) ~parent:root)); carry = Initial }
+
+let resume =
+  {
+    take =
+      (fun child root ->
+        let page = Served.resumable child ~parent:root in
+        { shown = (fun () -> Served.resumed page); gone = (fun () -> Served.leave page) });
+    carry = Initial;
+  }
+
 let hot = { mount with carry = Running }
 
 (** What a program leaves on its root for the next version of the code. *)
@@ -61,12 +75,10 @@ let launch course ~tracking ~mode ~view initial root =
   let model = ref initial and schedule = ref Idle and sink = ref ignore and pending = ref 0 in
   let drawing = ref Cmd.Instant in
   let dispatch message = !sink message in
-  let mounted =
-    mode.take (Html.render (view initial) dispatch) root
-  in
+  let page = mode.take (fun () -> Html.render (view initial) dispatch) root in
   let patch () =
     let changed = !pending in
-    if changed land tracking.reads <> 0 then View.patch mounted (Html.render (view !model) dispatch);
+    if changed land tracking.reads <> 0 then View.patch (page.shown ()) (Html.render (view !model) dispatch);
     pending := 0;
     if changed land tracking.listens <> 0 then course.drawn changed !model dispatch
   in
@@ -104,7 +116,7 @@ let launch course ~tracking ~mode ~view initial root =
     sink := ignore;
     schedule := Idle;
     course.halted dispatch;
-    View.unmount mounted;
+    page.gone ();
     Dom_api.set_property root running_key Js.undefined
   in
   Dom_api.set_property root running_key

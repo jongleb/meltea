@@ -26,16 +26,45 @@ val with_key : string -> child -> child
 (** Whether a compiled loop's rows are drawn from the item alone, or from the item and its index. *)
 type numbering = Items | Numbered
 
+(** How a selector compares the key it chose with a row's: OCaml's [=] or [==]. *)
+type equality = Structural | Physical
+
+(** A compiled loop site that has selectors, made once per site. *)
+type selection
+
+(** [selection others]: the bits of [others] are the outer inputs that the pieces other than selectors read. *)
+val selection : int -> selection
+
+(** A projected piece of a loop's row that is one value in the rows whose key is the one the outer
+    values chose, and another in the rest. *)
+type 'item selector
+
+(** [selector equality chosen key]: [chosen] is the key the outer values choose, if any; [key] gives a
+    row's key from its item and index. *)
+val selector : equality -> 'key option -> ('item -> int -> 'key[@u]) -> 'item selector
+
+(** The selectors of one render of a compiled loop, in the order of the pieces they are. When only
+    inputs that selectors alone read change and the items stay, a loop draws again only the rows
+    whose key a selector chose before or chooses now, looked up in an index of the rows by key. *)
+type 'item selectors = Unselecting | Selecting of selection * 'item selector array
+
 (** A compiled loop: [project item index out at] writes the [pieces] values of a row's rendering that read
     [outer] into [out] from [at], so that a change of [outer] re-renders only the rows they differ in
     and allocates nothing per row; a [Numbered] row is drawn again when its index changes. *)
+(** One loop in the generated code, made once per loop site: a loop patches only the rows its own site drew. *)
+type loop_site
+
+val loop_site : unit -> loop_site
+
 val each :
+  loop_site ->
   numbering ->
   'item array ->
   ('item -> int -> child[@u]) ->
   ('item -> int -> input array -> int -> unit[@u]) ->
   int ->
   input array ->
+  'item selectors ->
   child
 
 (** What a compiled template's frame needs at the moments only the runtime sees; [None] for nothing. *)
@@ -61,6 +90,7 @@ val rows :
   ('item -> int -> input array -> int -> unit[@u]) ->
   int ->
   input array ->
+  'item selectors ->
   child
 val tpl_instance : Template.t -> hole array -> child
 val lazy1 : ('a -> child) -> 'a -> child
@@ -211,6 +241,12 @@ val place_reference : Hole.reference -> unit
 val release_reference : Hole.reference -> unit
 (** [set_reference hole identity callback]: a ref whose identity is not the one held replaces it, the
     old one called with null and the new one with the element, as React compares its refs. *)
+(** Runs [attach] once the current write is over, as React attaches refs after its commit. *)
+val attach_later : (unit -> unit) -> unit
+
+(** Runs the attachments waiting for the end of the write: Melact calls it after a flush's renders. *)
+val attach_references : unit -> unit
+
 val set_reference : Hole.reference -> 'identity -> (Dom.element Js.nullable -> unit) -> unit
 val content_hole : Template.position -> Hole.content
 val release_content : Hole.content -> unit

@@ -834,7 +834,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
               match (numbering, lambda.pexp_desc) with
               | Items, Pexp_function ([ { pparam_desc = Pparam_val (Nolabel, None, pattern); _ } ], None, Pfunction_body body)
                 ->
-                  Some ((fun inner -> [%expr let [%p pattern] = __melhole_item in [%e inner]]), body)
+                  Some ((fun inner -> [%expr let [%p pattern] = __melhole_item in [%e inner]]), body, Free.bound pattern)
               | ( Numbered,
                   Pexp_function
                     ( [
@@ -845,18 +845,16 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                       Pfunction_body body ) ) ->
                   Some
                     ( (fun inner -> [%expr let [%p position] = __melhole_index in let [%p pattern] = __melhole_item in [%e inner]]),
-                      body )
+                      body,
+                      Free.bound position @ Free.bound pattern )
               | (Items | Numbered), _ -> None
             in
-            Option.bind bound (fun (bind, body) ->
+            Option.bind bound (fun (bind, body, row) ->
                 match Free.of_expression lambda with
                 | Volatile -> None
                 | Reads read ->
-                    Option.map
-                      (fun leaves -> (bind, leaves))
-                      (Free.leaves
-                         ~outer:(List.filter (fun name -> List.mem name frontend.locals) read)
-                         ~view body)))
+                    let outer = List.filter (fun name -> List.mem name frontend.locals) read in
+                    Option.map (fun leaves -> (bind, leaves, row, outer)) (Free.leaves ~outer ~view body)))
       in
       let written values =
         List.fold_right
@@ -870,7 +868,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
       let pieces =
         eint ~loc
           (List.length stable
-          + Option.fold ~none:(List.length names) ~some:(fun (_, leaves) -> List.length leaves) split)
+          + Option.fold ~none:(List.length names) ~some:(fun (_, leaves, _, _) -> List.length leaves) split)
       in
       let project =
         pexp_record ~loc
@@ -878,7 +876,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
             ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I4"); loc },
               Option.fold
                 ~none:[%expr fun _ _ __melhole_out __melhole_at -> [%e written (List.map (fun name -> evar ~loc name) names)]]
-                ~some:(fun (bind, leaves) ->
+                ~some:(fun (bind, leaves, _, _) ->
                   [%expr
                     fun __melhole_item __melhole_index __melhole_out __melhole_at ->
                       [%e bind (written leaves)]
@@ -888,6 +886,61 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
           None
       in
       let outer = inputs (List.map (fun name -> evar ~loc name) names) in
+      let selectors =
+        let given = stable @ List.map (fun name -> evar ~loc name) names in
+        let read leaf =
+          match Free.closure ~definitions ~locals:frontend.locals leaf with
+          | Volatile -> (1 lsl List.length given) - 1
+          | Reads read ->
+              List.fold_left ( lor ) 0
+                (List.mapi
+                   (fun at value ->
+                     match value.pexp_desc with
+                     | Pexp_ident { txt = Lident name; _ } when List.mem name read -> 1 lsl at
+                     | _ -> 0)
+                   given)
+        in
+        Option.fold ~none:[%expr Melhole.View.Unselecting]
+          ~some:(fun (bind, leaves, row, outer) ->
+            let pieces = List.map (fun leaf -> (leaf, Selector.of_leaf ~outer ~row leaf)) leaves in
+            match (List.filter_map snd pieces, List.length given <= 30) with
+            | [], _ | _, false -> [%expr Melhole.View.Unselecting]
+            | chosen, true ->
+                let others =
+                  List.fold_left
+                    (fun others (leaf, selector) ->
+                      Option.fold ~none:(others lor read leaf) ~some:(fun _ -> others) selector)
+                    ((1 lsl List.length stable) - 1)
+                    pieces
+                in
+                let selection = Hoist.hoist ~loc "selection" [%expr Melhole.View.selection [%e eint ~loc others]] in
+                [%expr
+                  Melhole.View.Selecting
+                    ( [%e selection],
+                      [%e
+                        pexp_array ~loc
+                          (List.map
+                             (fun { Selector.chosen; key; equality } ->
+                               [%expr
+                                 Melhole.View.selector
+                                   [%e
+                                     match equality with
+                                     | Structural -> [%expr Melhole.View.Structural]
+                                     | Physical -> [%expr Melhole.View.Physical]]
+                                   [%e chosen]
+                                   [%e
+                                     pexp_record ~loc
+                                       [
+                                         ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I2"); loc },
+                                           [%expr
+                                             fun __melhole_item __melhole_index ->
+                                               [%e bind key]
+                                               [@ocaml.warning "-26-27"]] );
+                                       ]
+                                       None]])
+                             chosen)] )])
+          split
+      in
       let rec marked body =
         match body.pexp_desc with
         | Pexp_let (flag, bindings, rest) ->
@@ -961,7 +1014,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                           [%expr
                             Melhole.View.rows [%e items] [%e template] [%e root] [%e refresh]
                               [%e uncurried [%expr fun __melhole_item -> [%e given key]]]
-                              [%e project] [%e pieces] [%e outer]]
+                              [%e project] [%e pieces] [%e outer] [%e selectors]]
                         in
                         match row.pexp_desc with
                         | Pexp_ident _ -> [%expr let _ = [%e row] in [%e loop]]
@@ -975,6 +1028,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
           Some
             [%expr
               Melhole.View.each
+                [%e Hoist.hoist ~loc "site" [%expr Melhole.View.loop_site ()]]
                 [%e match numbering with Items -> [%expr Melhole.View.Items] | Numbered -> [%expr Melhole.View.Numbered]]
                 [%e items]
                 [%e
@@ -990,7 +1044,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                                 [%e render [%expr [%e frontend.map row] __melhole_index __melhole_item]]] );
                     ]
                     None]
-                [%e project] [%e pieces] [%e outer]]
+                [%e project] [%e pieces] [%e outer] [%e selectors]]
 
 let fragment frontend ~loc items =
   frontend.wrap loc

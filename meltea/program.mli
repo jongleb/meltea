@@ -8,6 +8,12 @@ type start
 val mount : start
 val hydrate : start
 
+(** Like [hydrate], but the server's page stays as it is, without running the view, until the first
+    input inside it (a click, a key, typing, a pointer press) or the first draw of a message from a
+    command or subscription; then it is taken over at once and the input or the draw goes on. Events
+    kept before the code arrived are replayed at once, as with [hydrate]. *)
+val resume : start
+
 (** For development: take the model of the program running on the root, when the module's types
     are the same, so that new code shows the old state; otherwise start from [init]. *)
 val hot : start

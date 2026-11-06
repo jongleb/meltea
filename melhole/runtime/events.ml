@@ -107,7 +107,7 @@ let unlisten element event =
         (fun remove -> remove ())
         (Js.Undefined.toOption (Dom_api.property element (removal_of event) : (unit -> unit) Js.undefined))
 
-external early : (unit -> (Dom.event * string Js.undefined * bool Js.undefined) array) Js.undefined
+external capture : (unit -> (Dom.event * string Js.undefined * bool Js.undefined) array) Js.undefined
   = "__melhole_early"
 [@@mel.scope "globalThis"]
 
@@ -117,48 +117,67 @@ external checked : Dom.node -> bool Js.undefined = "checked" [@@mel.get]
 external set_value : Dom.node -> string -> unit = "value" [@@mel.set]
 external set_checked : Dom.node -> bool -> unit = "checked" [@@mel.set]
 
-let replay root =
-  let restore target value checked =
-    Option.iter (set_value target) (Js.Undefined.toOption value);
-    Option.iter (set_checked target) (Js.Undefined.toOption checked)
-  in
+type early = { root : Dom.node; kept : (Dom.event * string Js.undefined * bool Js.undefined) array }
+
+let early root =
+  Option.bind (Js.Undefined.toOption capture) (fun take ->
+      match
+        Js.Array.filter
+          ~f:(fun (native, _, _) -> Option.fold ~none:false ~some:(contains root) (Dom_api.target native))
+          (take ())
+      with
+      | [||] -> None
+      | kept -> Some { root; kept })
+
+let restore target kept_value kept_checked =
   Option.iter
-    (fun take ->
-      let recorded = take () in
-      let finals =
-        Array.map
-          (fun (native, _, _) ->
-            Option.map (fun target -> (target, value target, checked target)) (Dom_api.target native))
-          recorded
-      in
-      Array.iter
-        (fun (native, early_value, early_checked) ->
-          Option.iter
-            (fun target ->
-              match (contains root target, List.assoc_opt (Dom_api.event_type native) !deliveries) with
-              | false, _ -> ()
-              | true, found -> (
-                  restore target early_value early_checked;
-                  match found with
-                  | Some deliver -> deliver native
-                  | None ->
-                      let key = key_of (Dom_api.event_type native) in
-                      let rec bubble node =
-                        Option.iter
-                          (fun handle ->
-                            Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
-                            handle native)
-                          (Dom_api.handler node key);
-                        match (Dom_api.cancel_bubble native, Dom_api.same node root) with
-                        | true, _ | false, true -> ()
-                        | false, false -> Option.iter bubble (Dom_api.parent_node node)
-                      in
-                      bubble target;
-                      Dom_api.release_current_target native);
-                  match Dom_api.event_type native with
-                  | "input" | "change" -> Option.iter (fun restore -> restore native) (Dom_api.handler target controlled)
-                  | _ -> ())
-            (Dom_api.target native))
-        recorded;
-      Array.iter (Option.iter (fun (target, value, checked) -> restore target value checked)) finals)
-    (Js.Undefined.toOption early)
+    (fun kept -> if not (Js.Undefined.toOption (value target) = Some kept) then set_value target kept)
+    (Js.Undefined.toOption kept_value);
+  Option.iter
+    (fun kept -> if not (Js.Undefined.toOption (checked target) = Some kept) then set_checked target kept)
+    (Js.Undefined.toOption kept_checked)
+
+let preserving native run =
+  Option.iter
+    (fun target ->
+      let value = value target and checked = checked target in
+      run ();
+      restore target value checked)
+    (Dom_api.target native)
+
+let replay { root; kept } =
+  let finals =
+    Array.map
+      (fun (native, _, _) -> Option.map (fun target -> (target, value target, checked target)) (Dom_api.target native))
+      kept
+  in
+  Array.iter
+    (fun (native, early_value, early_checked) ->
+      Option.iter
+        (fun target ->
+          match (contains root target, List.assoc_opt (Dom_api.event_type native) !deliveries) with
+          | false, _ -> ()
+          | true, found -> (
+              restore target early_value early_checked;
+              match found with
+              | Some deliver -> deliver native
+              | None ->
+                  let key = key_of (Dom_api.event_type native) in
+                  let rec bubble node =
+                    Option.iter
+                      (fun handle ->
+                        Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
+                        handle native)
+                      (Dom_api.handler node key);
+                    match (Dom_api.cancel_bubble native, Dom_api.same node root) with
+                    | true, _ | false, true -> ()
+                    | false, false -> Option.iter bubble (Dom_api.parent_node node)
+                  in
+                  bubble target;
+                  Dom_api.release_current_target native);
+              match Dom_api.event_type native with
+              | "input" | "change" -> Option.iter (fun restore -> restore native) (Dom_api.handler target controlled)
+              | _ -> ())
+        (Dom_api.target native))
+    kept;
+  Array.iter (Option.iter (fun (target, value, checked) -> restore target value checked)) finals

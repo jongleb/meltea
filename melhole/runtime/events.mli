@@ -28,4 +28,15 @@ val set : Dom.element -> string -> (Dom.event -> unit) -> unit
 (** The property under which a controlled element keeps what puts its value back after input. *)
 val controlled : string
 
-val replay : Dom.node -> unit
+(** Events the capture script kept inside a root before the code arrived, each with the value and
+    checked state its target had then. *)
+type early
+
+(** Takes the kept events from the capture script, which stops it; [None] when none is inside the root. *)
+val early : Dom.node -> early option
+
+(** Runs the function, then gives the event's target back the value and checked state it had. *)
+val preserving : Dom.event -> (unit -> unit) -> unit
+
+(** Delivers the kept events in order, each with its target's value of that moment. *)
+val replay : early -> unit

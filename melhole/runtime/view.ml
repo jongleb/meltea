@@ -1,4 +1,7 @@
 (** A value of any type, compared physically. *)
+(** One loop in the generated code; a loop patches only the rows its own site drew. *)
+type loop_site = unit ref
+
 type input = Input : 'a -> input [@@unboxed]
 
 (** Whether a value differs from the one remembered for it. *)
@@ -32,6 +35,56 @@ type 'value hosting = {
   kind : 'value Witness.t;
 }
 
+(** How a selector compares the key it chose with a row's: OCaml's [=] or [==]. *)
+type equality = Structural | Physical
+
+(** A compiled loop site that has selectors; the bits of [others] are the outer inputs that a row's
+    other pieces read. *)
+type selection = { others : int }
+
+(** A projected piece of a loop's row that is one value in the rows whose key is the one [chosen]
+    by the outer values, and another in the rest. *)
+type 'item selector =
+  | Selector : {
+      equality : equality;
+      chosen : 'key option;
+      key : ('item -> int -> 'key[@u]);  (** A row's key, from its item and its index. *)
+    }
+      -> 'item selector
+
+(** The selectors of one render of a compiled loop. *)
+type 'item selectors = Unselecting | Selecting of selection * 'item selector array
+
+(** A JavaScript [Map] from a selector's key to the rows that have it. *)
+module Index : sig
+  type t
+
+  val of_rows : ('item -> int -> 'key[@u]) -> 'item array -> t
+  val rows : t -> 'key -> int array option
+end = struct
+  type t
+
+  external make : unit -> t = "Map" [@@mel.new]
+  external get : t -> 'key -> int array Js.undefined = "get" [@@mel.send]
+  external set : t -> 'key -> int array -> t = "set" [@@mel.send]
+  external push : int array -> int -> int = "push" [@@mel.send]
+
+  let of_rows key items =
+    let index = make () in
+    for row = 0 to Array.length items - 1 do
+      let found = key (Array.unsafe_get items row) row [@u] in
+      match Js.Undefined.toOption (get index found) with
+      | Some rows -> ignore (push rows row)
+      | None -> ignore (set index found [| row |])
+    done;
+    index
+
+  let rows index key = Js.Undefined.toOption (get index key)
+end
+
+(** A loop's rows by every selector's key, made the first time a selection changes, for one site. *)
+type indexes = Unindexed | Indexed of selection * Index.t array
+
 (** A mounted child: what it is, so that the next child can tell whether it can patch it, and what
     it holds. *)
 type live =
@@ -50,11 +103,14 @@ type live =
       (** Writes the next values to its holes. *)
   | Hosted : 'value hosting * 'value -> live
   | Each_state : {
+      site : loop_site;  (** The loop in the code that drew the rows. *)
       items : 'item array;
       keys : string array;
       outer : input array;  (** What the rendering reads besides the item. *)
       projections : input array;  (** Row after row, the parts of its rendering that read [outer]. *)
       lives : live array;
+      selectors : 'item selectors;  (** Those of the last render: they chose the keys the rows show. *)
+      indexes : indexes;
     }
       -> live
   | Rows_state : {
@@ -65,6 +121,8 @@ type live =
       outer : input array;
       projections : input array;
       frames : 'frame array;
+      selectors : 'item selectors;
+      indexes : indexes;
     }
       -> live
 
@@ -442,7 +500,76 @@ let pieces_copied source from target at pieces =
 
 type numbering = Items | Numbered
 
-let each numbering items render project pieces outer =
+let selection others = { others }
+let selector equality chosen key = Selector { equality; chosen; key }
+
+let reselected (type drawn item) (old_items : drawn array) (old_selectors : drawn selectors) indexes old_outer
+    (items : item array) (selectors : item selectors) outer redraw =
+  match (old_selectors, selectors) with
+  | Selecting (drawn_selection, old_table), Selecting (current, table)
+    when Dom_api.same drawn_selection current
+         && Array.length old_table = Array.length table
+         && Array.length old_items = Array.length items
+         && Array.length old_outer = Array.length outer -> (
+      let changed = ref 0 in
+      for at = 0 to Array.length outer - 1 do
+        let (Input before) = Array.unsafe_get old_outer at in
+        let (Input next) = Array.unsafe_get outer at in
+        if not (Dom_api.same before next) then changed := !changed lor (1 lsl at)
+      done;
+      let rec kept row =
+        match row = Array.length items with
+        | true -> `Kept
+        | false ->
+            if Dom_api.same (Array.unsafe_get old_items row) (Array.unsafe_get items row) then kept (row + 1)
+            else `Replaced
+      in
+      let lookable equality chosen =
+        match (equality, chosen) with
+        | _, None | Physical, Some _ -> `Lookable
+        | Structural, Some key -> (
+            match Js.typeof key with "number" | "string" | "boolean" -> `Lookable | _ -> `Unlookable)
+      in
+      let rec usable j =
+        match j = Array.length table with
+        | true -> `Usable
+        | false -> (
+            let (Selector before) = Array.unsafe_get old_table j in
+            let (Selector next) = Array.unsafe_get table j in
+            match (lookable next.equality before.chosen, lookable next.equality next.chosen) with
+            | `Lookable, `Lookable -> usable (j + 1)
+            | `Unlookable, _ | _, `Unlookable -> `Unusable)
+      in
+      match (!changed land current.others, kept 0, usable 0) with
+      | 0, `Kept, `Usable ->
+          let index = ref indexes in
+          let built () =
+            match !index with
+            | Indexed (indexed, built) when Dom_api.same indexed current -> built
+            | Indexed _ | Unindexed ->
+                let built = Array.map (fun (Selector selector) -> Index.of_rows selector.key items) table in
+                index := Indexed (current, built);
+                built
+          in
+          for j = 0 to Array.length table - 1 do
+            let (Selector before) = Array.unsafe_get old_table j in
+            let (Selector next) = Array.unsafe_get table j in
+            match (before.chosen, next.chosen) with
+            | Some a, Some b when Dom_api.same a b -> ()
+            | None, None -> ()
+            | before_key, next_key ->
+                let rows = Array.unsafe_get (built ()) j in
+                let look key = Option.iter (Array.iter redraw) (Index.rows rows key) in
+                Option.iter look before_key;
+                Option.iter look next_key
+          done;
+          Some !index
+      | _, (`Kept | `Replaced), (`Usable | `Unusable) -> None)
+  | (Unselecting | Selecting _), _ -> None
+
+let loop_site () = ref ()
+
+let each site numbering items render project pieces outer selectors =
   let count = Array.length items in
   let rendered index item =
     let child = render item index [@u] in
@@ -467,10 +594,11 @@ let each numbering items render project pieces outer =
         for index = 0 to count - 1 do
           project (Array.unsafe_get items index) index projections (index * pieces) [@u]
         done;
-        Each_state { items; keys; outer; projections; lives });
+        Each_state { site; items; keys; outer; projections; lives; selectors; indexes = Unindexed });
     patch =
       (fun [@u] position live ->
         match live with
+        | Each_state old when not (Dom_api.same old.site site) -> None
         | Each_state old -> (
             let old_count = Array.length old.items in
             let outer_change = compare_inputs old.outer outer in
@@ -485,6 +613,29 @@ let each numbering items render project pieces outer =
               in
               find index
             in
+            let redraw index =
+              let item = Array.unsafe_get items index and at = index * pieces in
+              project item index scratch 0 [@u];
+              match piece_change old.projections at scratch pieces with
+              | Unchanged -> ()
+              | Changed ->
+                  pieces_copied scratch 0 old.projections at pieces;
+                  Array.unsafe_set old.lives index
+                    (update
+                       { position with before = ahead old.lives (index + 1) }
+                       (Array.unsafe_get old.lives index)
+                       (fst (rendered index item)))
+            in
+            match
+              match outer_change with
+              | Unchanged -> None
+              | Changed -> reselected old.items old.selectors old.indexes old.outer items selectors outer redraw
+            with
+            | Some indexes ->
+                Some
+                  (Each_state
+                     { site; items; keys = old.keys; outer; projections = old.projections; lives = old.lives; selectors; indexes })
+            | None ->
             let in_place =
               match count = old_count with
               | false -> None
@@ -520,19 +671,10 @@ let each numbering items render project pieces outer =
                       Array.unsafe_set lives index
                         (update { position with before = ahead lives (index + 1) } (Array.unsafe_get lives index) child)
                   | None, Unchanged -> ()
-                  | None, Changed -> (
-                      project item index scratch 0 [@u];
-                      match piece_change projections at scratch pieces with
-                      | Unchanged -> ()
-                      | Changed ->
-                          pieces_copied scratch 0 projections at pieces;
-                          Array.unsafe_set lives index
-                            (update
-                               { position with before = ahead lives (index + 1) }
-                               (Array.unsafe_get lives index)
-                               (fst (rendered index item))))
+                  | None, Changed -> redraw index
                 done;
-                Some (Each_state { items; keys = old.keys; outer; projections; lives })
+                let indexes = match Array.length made with 0 -> old.indexes | _ -> Unindexed in
+                Some (Each_state { site; items; keys = old.keys; outer; projections; lives; selectors; indexes })
             | None ->
             let origins = Array.make count Origin.fresh and made = Array.make count None in
             let keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
@@ -609,7 +751,7 @@ let each numbering items render project pieces outer =
                     refresh (index - 1))
                 in
                 refresh (count - 1);
-                Some (Each_state { items; keys; outer; projections; lives })
+                Some (Each_state { site; items; keys; outer; projections; lives; selectors; indexes = Unindexed })
             | _, (`Same | `Moved) ->
                 let plan = Reconcile.plan ~old:old.keys ~next:keys in
                 (match spanned position live old.lives plan.dropped with
@@ -634,7 +776,7 @@ let each numbering items render project pieces outer =
                           live)
                     front_of
                 in
-                Some (Each_state { items; keys; outer; projections; lives })))
+                Some (Each_state { site; items; keys; outer; projections; lives; selectors; indexes = Unindexed })))
         | _ -> None);
   }
 
@@ -745,7 +887,7 @@ let adopted template refresh (position : Template.position) =
       (root, frame)
 
 let rows (type frame item) (items : item array) (template : frame template) (root : (frame -> Dom.element)[@u])
-    (refresh : (frame -> item -> unit)[@u]) (key : (item -> string)[@u]) project pieces outer =
+    (refresh : (frame -> item -> unit)[@u]) (key : (item -> string)[@u]) project pieces outer selectors =
   let count = Array.length items in
   let mount (position : Template.position) item =
     let made, frame =
@@ -762,7 +904,9 @@ let rows (type frame item) (items : item array) (template : frame template) (roo
   in
   let root_of frame = Dom_api.to_node (root frame [@u]) in
   let after = fun [@u] frame _ -> Dom_api.following_sibling (root_of frame) in
-  let shown items keys projections frames = Rows_state { template; root; items; keys; outer; projections; frames } in
+  let shown items keys projections frames indexes =
+    Rows_state { template; root; items; keys; outer; projections; frames; selectors; indexes }
+  in
   let drop (position : Template.position) frame =
     Dom_api.remove_child position.parent (root_of frame);
     Option.iter (fun released -> released frame [@u]) template.duties.released
@@ -784,7 +928,7 @@ let rows (type frame item) (items : item array) (template : frame template) (roo
         for index = 0 to count - 1 do
           project (Array.unsafe_get items index) index projections (index * pieces) [@u]
         done;
-        shown items keys projections frames);
+        shown items keys projections frames Unindexed);
     patch =
       (fun [@u] position live ->
         match live with
@@ -800,6 +944,22 @@ let rows (type frame item) (items : item array) (template : frame template) (roo
               refresh frame item [@u];
               frame
             in
+            let redraw index =
+              let item = Array.unsafe_get items index and at = index * pieces in
+              project item index scratch 0 [@u];
+              match piece_change old.projections at scratch pieces with
+              | Unchanged -> ()
+              | Changed ->
+                  pieces_copied scratch 0 old.projections at pieces;
+                  Array.unsafe_set old.frames index (refreshed (Array.unsafe_get old.frames index) item)
+            in
+            match
+              match outer_change with
+              | Unchanged -> None
+              | Changed -> reselected old.items old.selectors old.indexes old.outer items selectors outer redraw
+            with
+            | Some indexes -> Some (shown items old.keys old.projections old.frames indexes)
+            | None ->
             let rec in_place index =
               match index = count with
               | true -> `In_place
@@ -814,23 +974,18 @@ let rows (type frame item) (items : item array) (template : frame template) (roo
             in
             match (count = old_count, match count = old_count with true -> in_place 0 | false -> `Rearranged) with
             | true, `In_place ->
-                let frames = old.frames and projections = old.projections in
+                let frames = old.frames and projections = old.projections and indexes = ref old.indexes in
                 for index = 0 to count - 1 do
                   let item = Array.unsafe_get items index and at = index * pieces in
                   match (Dom_api.same item (Array.unsafe_get old.items index), outer_change) with
                   | true, Unchanged -> ()
-                  | true, Changed -> (
-                      project item index scratch 0 [@u];
-                      match piece_change projections at scratch pieces with
-                      | Unchanged -> ()
-                      | Changed ->
-                          pieces_copied scratch 0 projections at pieces;
-                          Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) item))
+                  | true, Changed -> redraw index
                   | false, _ ->
+                      indexes := Unindexed;
                       project item index projections at [@u];
                       Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) item)
                 done;
-                Some (shown items old.keys projections frames)
+                Some (shown items old.keys projections frames !indexes)
             | _, (`In_place | `Rearranged) ->
             let next = Array.make count Origin.fresh and keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
             let projections = (match count * pieces with 0 -> no_inputs | size -> Array.make size unset) in
@@ -884,7 +1039,7 @@ let rows (type frame item) (items : item array) (template : frame template) (roo
                   | Some from when from = index -> ()
                   | Some _ | None -> Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) (drawn index))
                 done;
-                Some (shown items keys projections frames)
+                Some (shown items keys projections frames Unindexed)
             | _, (`Same | `Moved) ->
                 let plan = Reconcile.plan ~old:old.keys ~next:keys in
                 let whole =
@@ -936,7 +1091,7 @@ let rows (type frame item) (items : item array) (template : frame template) (roo
                       done;
                       frames
                 in
-                Some (shown items keys projections frames)))
+                Some (shown items keys projections frames Unindexed)))
         | _ -> None);
   }
 
@@ -1097,7 +1252,7 @@ let set_style (hole : Hole.style) value =
   then (
     let style = Dom_api.style hole.element in
     let written name value =
-      match (String.length name >= 2 && String.equal (String.sub name 0 2) "--", value) with
+      match (String.length name >= 2 && String.unsafe_get name 0 = '-' && String.unsafe_get name 1 = '-', value) with
       | true, "" -> Dom_api.remove_style_property style name
       | true, _ -> Dom_api.set_style_property style name value ""
       | false, _ -> Dom_api.set_style style name value
@@ -1173,13 +1328,38 @@ let put_linked element key link dispatch data =
         (fun event -> link.body (Dom_api.property (Dom_api.current_target event) link.data_key) dispatch event [@u]));
   Events.set element key link.handler
 
+let attachments = ref []
+let writing = ref 0
+let attach_later attach = attachments := attach :: !attachments
+
+let attach_references () =
+  let pending = !attachments in
+  attachments := [];
+  List.iter (fun attach -> attach ()) (List.rev pending)
+
+let written run =
+  incr writing;
+  match run () with
+  | result ->
+      decr writing;
+      (match !writing with 0 -> attach_references () | _ -> ());
+      result
+  | exception error ->
+      decr writing;
+      raise error
+
 let reference_hole element : Hole.reference = { placement = Detached; element; identity = unset; callback = ignore }
+
+let attached (hole : Hole.reference) () =
+  match hole.placement with Placed -> hole.callback (Js.Nullable.return hole.element) | Detached -> ()
 
 let place_reference (hole : Hole.reference) =
   hole.placement <- Placed;
-  hole.callback (Js.Nullable.return hole.element)
+  attach_later (attached hole)
 
-let release_reference (hole : Hole.reference) = hole.callback Js.Nullable.null
+let release_reference (hole : Hole.reference) =
+  hole.placement <- Detached;
+  hole.callback Js.Nullable.null
 
 let set_reference (hole : Hole.reference) identity callback =
   let (Input held) = hole.identity in
@@ -1190,7 +1370,7 @@ let set_reference (hole : Hole.reference) identity callback =
     match hole.placement with
     | Placed ->
         previous Js.Nullable.null;
-        callback (Js.Nullable.return hole.element)
+        attach_later (attached hole)
     | Detached -> ())
 
 let content_hole (position : Template.position) : Hole.content =
@@ -1445,17 +1625,19 @@ let mount child ~parent ~before =
       before = Js.Null.fromOption (Option.map Dom_api.to_node before);
     }
   in
-  { position; source = child; live = child.build position [@u] }
+  written (fun () -> { position; source = child; live = child.build position [@u] })
 
 let patch mounted child =
-  if not (Dom_api.same mounted.source child) then (
-    mounted.live <- update mounted.position mounted.live child;
-    mounted.source <- child)
+  if not (Dom_api.same mounted.source child) then
+    written (fun () ->
+        mounted.live <- update mounted.position mounted.live child;
+        mounted.source <- child)
 
 let mount_over child ~parent =
   let parent = Dom_api.to_node parent in
   let position = { Template.parent; before = Js.null } in
-  { position; source = child; live = child.build { position with before = Dom_api.first_child_or_end parent } [@u] }
+  written (fun () ->
+      { position; source = child; live = child.build { position with before = Dom_api.first_child_or_end parent } [@u] })
 
 let unmount mounted =
   remove mounted.position mounted.live;

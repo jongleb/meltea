@@ -177,7 +177,14 @@ let mapper =
                               | false, _ -> None)))
               | _ -> []
             in
-            Hoist.structure (fun item -> self#structure_item (Remember.structure_item item)) [ item ] @ companions)
+            Hoist.structure
+              (fun item ->
+                self#structure_item
+                  (match !Element.output with
+                  | Element.Server -> item
+                  | Element.Client_only | Element.Hydratable -> Remember.structure_item item))
+              [ item ]
+            @ companions)
           items
       in
       tracked <- known;
