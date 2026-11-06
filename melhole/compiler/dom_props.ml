@@ -231,6 +231,7 @@ module Prop = struct
     | OnLoadedData [@as "onLoadedData"]
     | OnLoadedMetadata [@as "onLoadedMetadata"]
     | OnLoadStart [@as "onLoadStart"]
+    | OnLoad [@as "onLoad"]
     | OnPause [@as "onPause"]
     | OnPlay [@as "onPlay"]
     | OnPlaying [@as "onPlaying"]
@@ -747,6 +748,7 @@ let kind (prop : Prop.t) =
   | OnLoadedData -> Handler "loadeddata"
   | OnLoadedMetadata -> Handler "loadedmetadata"
   | OnLoadStart -> Handler "loadstart"
+  | OnLoad -> Handler "load"
   | OnPause -> Handler "pause"
   | OnPlay -> Handler "play"
   | OnPlaying -> Handler "playing"

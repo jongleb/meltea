@@ -93,7 +93,7 @@ let prop frontend ~loc ~label kind requirement value =
           | Decimal -> [%expr 0.]
         in
         hole site
-          [%expr (Option.value ~default:[%e default] ([%e value] : [%t type_of kind] option))]
+          [%expr (Stdlib.Option.value ~default:[%e default] ([%e value] : [%t type_of kind] option))]
   in
   match (kind, requirement, literal) with
   | Dom_props.Ignored, _, _ -> Absent
@@ -132,16 +132,16 @@ let prop frontend ~loc ~label kind requirement value =
       hole (Attr name)
         [%expr
           
-            (Option.map
+            (Stdlib.Option.map
                (fun flag -> if flag then "true" else "false")
                ([%e value] : bool option))]
   | Attribute (name, Integer), `Optional, _ ->
       hole (Attr name)
-        [%expr (Option.map string_of_int ([%e value] : int option))]
+        [%expr (Stdlib.Option.map string_of_int ([%e value] : int option))]
   | Attribute (name, Decimal), `Optional, _ ->
       hole (Attr name)
         [%expr
-          (Option.map [%e float_text ~loc] ([%e value] : float option))]
+          (Stdlib.Option.map [%e float_text ~loc] ([%e value] : float option))]
   | Property (name, kind), requirement, _ -> property (Prop name) kind requirement
   | Controlled (name, kind), requirement, _ -> property (Control name) kind requirement
   | Handler event, requirement, _ ->
@@ -150,7 +150,7 @@ let prop frontend ~loc ~label kind requirement value =
   | Ref, requirement, _ -> hole Ref (frontend.reference loc requirement value)
   | Inner_html, `Required, _ -> hole (Prop "innerHTML") [%expr Melhole.View.html_of [%e value]]
   | Inner_html, `Optional, _ ->
-      hole (Prop "innerHTML") [%expr Option.fold ~none:"" ~some:Melhole.View.html_of [%e value]]
+      hole (Prop "innerHTML") [%expr Stdlib.Option.fold ~none:"" ~some:Melhole.View.html_of [%e value]]
 
 let rec analyse frontend ~loc tag arguments =
   let statics = ref [] and dynamics = ref [] and children = ref [] and key = ref None in

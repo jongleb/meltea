@@ -50,7 +50,7 @@ let mapper =
                 [%expr
                   
                     (fun __melhole_event ->
-                      Option.iter (fun __melhole_message -> [%e send [%expr __melhole_message]]) [%e value])]);
+                      Stdlib.Option.iter (fun __melhole_message -> [%e send [%expr __melhole_message]]) [%e value])]);
         style =
           (fun loc requirement value ->
             match requirement with
@@ -58,7 +58,7 @@ let mapper =
             | `Optional ->
                 [%expr
                   
-                    (Option.value ~default:[] ([%e value] : (string * string) list option))]);
+                    (Stdlib.Option.value ~default:[] ([%e value] : (string * string) list option))]);
         reference =
           (fun loc _ _ ->
             Location.raise_errorf ~loc "meltea: views are pure; there are no refs in Meltea");
@@ -91,7 +91,7 @@ let mapper =
                       {
                         pexp_desc =
                           Pexp_apply
-                            ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "List", "map"); _ }; _ },
+                            ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "List", "map") | Ldot (Ldot (Lident "Stdlib", "List"), "map"); _ }; _ },
                               [ (Nolabel, row); (Nolabel, items) ] );
                         _;
                       } );
@@ -106,7 +106,7 @@ let mapper =
                   ~stable:[ [%expr __melhole_dispatch] ]
                   ~render:(fun view -> [%expr Html.render [%e view] __melhole_dispatch])
                   row
-                  [%expr Array.of_list [%e self#expression items]]
+                  [%expr Stdlib.Array.of_list [%e self#expression items]]
             | _ -> None
             in
             looped item);
