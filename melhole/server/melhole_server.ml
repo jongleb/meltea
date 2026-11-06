@@ -1,33 +1,49 @@
 (** The kind of the last node written. *)
 type last = Text_last | Other_last
 
-type writer = { buffer : Buffer.t; mutable last : last }
+(** Where the HTML goes: a buffer natively, a string under Melange, where JavaScript joins strings cheaply. *)
+type sink = Buffered of Buffer.t | Joined of { mutable text : string }
+
+type writer = { sink : sink; mutable last : last }
 type child = writer -> unit
 
+let added writer value =
+  match writer.sink with Buffered buffer -> Buffer.add_string buffer value | Joined joined -> joined.text <- joined.text ^ value
+
 let escape value =
-  let buffer = Buffer.create (String.length value) in
-  String.iter
-    (fun character ->
-      match character with
-      | '&' -> Buffer.add_string buffer "&amp;"
-      | '<' -> Buffer.add_string buffer "&lt;"
-      | '>' -> Buffer.add_string buffer "&gt;"
-      | '"' -> Buffer.add_string buffer "&quot;"
-      | '\'' -> Buffer.add_string buffer "&#x27;"
-      | other -> Buffer.add_char buffer other)
-    value;
-  Buffer.contents buffer
+  let length = String.length value in
+  let rec special index =
+    match index = length with
+    | true -> length
+    | false -> (
+        match String.unsafe_get value index with '&' | '<' | '>' | '"' | '\'' -> index | _ -> special (index + 1))
+  in
+  match special 0 with
+  | first when first = length -> value
+  | first ->
+      let buffer = Buffer.create (length + 16) in
+      Buffer.add_substring buffer value 0 first;
+      for index = first to length - 1 do
+        match String.unsafe_get value index with
+        | '&' -> Buffer.add_string buffer "&amp;"
+        | '<' -> Buffer.add_string buffer "&lt;"
+        | '>' -> Buffer.add_string buffer "&gt;"
+        | '"' -> Buffer.add_string buffer "&quot;"
+        | '\'' -> Buffer.add_string buffer "&#x27;"
+        | other -> Buffer.add_char buffer other
+      done;
+      Buffer.contents buffer
 
 let markup writer value =
-  Buffer.add_string writer.buffer value;
+  added writer value;
   writer.last <- Other_last
 
 let markup_text writer value =
-  Buffer.add_string writer.buffer value;
+  added writer value;
   writer.last <- Text_last
 
 let static_text writer value =
-  (match writer.last with Text_last -> Buffer.add_string writer.buffer "<!-- -->" | Other_last -> ());
+  (match writer.last with Text_last -> added writer "<!-- -->" | Other_last -> ());
   markup_text writer value
 
 let dynamic_text writer value =
@@ -40,18 +56,23 @@ let element write = write
 let write writer child = child writer
 
 let render child =
-  let writer = { buffer = Buffer.create 1024; last = Other_last } in
+  let writer =
+    {
+      sink = (match Sys.backend_type with Native | Bytecode -> Buffered (Buffer.create 1024) | Other _ -> Joined { text = "" });
+      last = Other_last;
+    }
+  in
   child writer;
-  Buffer.contents writer.buffer
+  match writer.sink with Buffered buffer -> Buffer.contents buffer | Joined joined -> joined.text
 
 let attribute writer name value =
   Option.iter
     (fun value ->
-      Buffer.add_char writer.buffer ' ';
-      Buffer.add_string writer.buffer name;
-      Buffer.add_string writer.buffer "=\"";
-      Buffer.add_string writer.buffer (escape value);
-      Buffer.add_char writer.buffer '"')
+      added writer " ";
+      added writer name;
+      added writer "=\"";
+      added writer (escape value);
+      added writer "\"")
     value
 
 let flag writer name value = attribute writer name (match value with true -> Some "" | false -> None)
