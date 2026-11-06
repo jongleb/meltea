@@ -148,13 +148,9 @@ let prop frontend ~loc ~label kind requirement value =
       hole (Handler event) (frontend.handler loc { label; event; requirement; value })
   | Style, requirement, _ -> hole Style (frontend.style loc requirement value)
   | Ref, requirement, _ -> hole Ref (frontend.reference loc requirement value)
-  | Inner_html, `Required, _ ->
-      hole (Prop "innerHTML") [%expr [%e value]##__html]
+  | Inner_html, `Required, _ -> hole (Prop "innerHTML") [%expr Melhole.View.html_of [%e value]]
   | Inner_html, `Optional, _ ->
-      hole (Prop "innerHTML")
-        [%expr
-          
-            (Option.fold ~none:"" ~some:(fun html -> html##__html) [%e value])]
+      hole (Prop "innerHTML") [%expr Option.fold ~none:"" ~some:Melhole.View.html_of [%e value]]
 
 let rec analyse frontend ~loc tag arguments =
   let statics = ref [] and dynamics = ref [] and children = ref [] and key = ref None in

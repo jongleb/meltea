@@ -144,6 +144,10 @@ val attr_hole : Dom.element -> string -> Hole.attr
 val set_attr : Hole.attr -> string option -> unit
 val prop_hole : Dom.element -> string -> Hole.prop
 val set_prop : Hole.prop -> 'a -> unit
+(** The HTML of a [dangerouslySetInnerHTML] prop; compiled code reads it through this, so that it
+    needs no ppx of its own. *)
+external html_of : < __html : string > Js.t -> string = "__html" [@@mel.get]
+
 (** Puts every controlled value back that an input or change event left different from the state;
     it runs by itself after the next render, and [act] runs it at once. *)
 val restore_controlled : unit -> unit

@@ -946,6 +946,8 @@ let set_prop (hole : Hole.prop) value =
         | false -> ()));
     hole.value <- Input value)
 
+external html_of : < __html : string > Js.t -> string = "__html" [@@mel.get]
+
 let restores = ref []
 
 let restore_controlled () =
