@@ -12,7 +12,12 @@ type pace = Discrete | Continuous
 (** The pace of the event whose handlers are running; [Discrete] outside handlers. *)
 val pace : pace ref
 
-val bind : Dom.element -> string -> string * registration
+(** The property an element keeps its handler for an event under. *)
+val key_of : string -> string
+
+(** Listens for an event on behalf of an element: at the document once per event type when it
+    bubbles, on the element otherwise. *)
+val register : Dom.element -> string -> registration
 
 val set : Dom.element -> string -> (Dom.event -> unit) -> unit
 

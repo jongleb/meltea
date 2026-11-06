@@ -31,4 +31,6 @@ jobs:
         run: |
           opam exec -- dune build @runtest-js
           npx vitest run
+      - name: typing into controlled inputs with real key events in Chrome
+        run: CHROME=$(which google-chrome) node test/browser/typing.mjs
       - run: opam lint *.opam

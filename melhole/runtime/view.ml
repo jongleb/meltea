@@ -373,8 +373,21 @@ let with_key key child =
         | _ -> None);
   }
 
-(** A row of the next render of a loop: the old row kept as it is, or what to patch it with. *)
-type 'fresh next = Kept of int | Fresh of 'fresh
+(** Where a row of a loop's next render comes from: an old row, by its index, or none. An int inside,
+    so that a patch allocates nothing per row. *)
+module Origin : sig
+  type t
+
+  val fresh : t
+  val kept : int -> t
+  val kept_from : t -> int option
+end = struct
+  type t = int
+
+  let fresh = -1
+  let kept from = from
+  let kept_from origin = match origin < 0 with true -> None | false -> Some origin
+end
 
 let each items render project outer =
   let count = Array.length items in
@@ -404,7 +417,8 @@ let each items render project outer =
         match live.state with
         | Each_state old ->
             let old_count = Array.length old.items in
-            let rows = Array.make count (Kept 0) and keys = Array.make count "" in
+            let origins = Array.make count Origin.fresh and made = Array.make count None in
+            let keys = Array.make count "" in
             let projections = Array.make count [||] in
             let outer_change = compare_inputs old.outer outer in
             let shift = ref 0 in
@@ -426,7 +440,7 @@ let each items render project outer =
                        projected
                 in
                 let reuse from =
-                  Array.unsafe_set rows index (Kept from);
+                  Array.unsafe_set origins index (Origin.kept from);
                   Array.unsafe_set keys index (Array.unsafe_get old.keys from);
                   Array.unsafe_set projections index
                     (Option.value ~default:(Array.unsafe_get old.projections from) projected)
@@ -440,15 +454,15 @@ let each items render project outer =
                   reuse (index + !shift))
                 else (
                   let child, key = rendered index item in
-                  Array.unsafe_set rows index (Fresh child);
+                  Array.unsafe_set made index (Some child);
                   Array.unsafe_set keys index key;
                   Array.unsafe_set projections index
                     (match projected with Some projection -> projection | None -> project item [@u])))
               items;
             let described index =
-              match Array.unsafe_get rows index with
-              | Fresh child -> child
-              | Kept _ -> fst (rendered index (Array.unsafe_get items index))
+              match Array.unsafe_get made index with
+              | Some child -> child
+              | None -> fst (rendered index (Array.unsafe_get items index))
             in
             let rec order index =
               match index = count with
@@ -470,9 +484,9 @@ let each items render project outer =
                 in
                 let rec refresh index =
                   if index >= 0 then (
-                    (match Array.unsafe_get rows index with
-                    | Kept from when from = index -> ()
-                    | Kept _ | Fresh _ ->
+                    (match Origin.kept_from (Array.unsafe_get origins index) with
+                    | Some from when from = index -> ()
+                    | Some _ | None ->
                         Array.unsafe_set lives index
                           (update
                              { position with before = ahead (index + 1) }
@@ -491,9 +505,9 @@ let each items render project outer =
                 | _, (Whole | Part) ->
                     List.iter (fun i -> remove position (Array.unsafe_get old.lives i)) plan.dropped);
                 let carried at i j =
-                  match Array.unsafe_get rows j with
-                  | Kept from when from = i -> Array.unsafe_get old.lives i
-                  | Kept _ | Fresh _ -> update at (Array.unsafe_get old.lives i) (described j)
+                  match Origin.kept_from (Array.unsafe_get origins j) with
+                  | Some from when from = i -> Array.unsafe_get old.lives i
+                  | Some _ | None -> update at (Array.unsafe_get old.lives i) (described j)
                 in
                 let lives =
                   backwards count position (fun [@u] j at ->
@@ -711,7 +725,7 @@ let rows (type holes item) (items : item array) (template : holes template) slot
         match live.state with
         | Rows_state old ->
             let old_count = Array.length old.items in
-            let next = Array.make count (Kept 0) and keys = Array.make count "" in
+            let next = Array.make count Origin.fresh and keys = Array.make count "" in
             let projections = Array.make count [||] in
             let outer_change = compare_inputs old.outer outer in
             let fits from item projected =
@@ -726,7 +740,7 @@ let rows (type holes item) (items : item array) (template : holes template) slot
                   | Changed -> false)
             in
             let reuse index from projected =
-              Array.unsafe_set next index (Kept from);
+              Array.unsafe_set next index (Origin.kept from);
               Array.unsafe_set keys index (Array.unsafe_get old.keys from);
               Array.unsafe_set projections index
                 (match projected with Some projection -> projection | None -> Array.unsafe_get old.projections from)
@@ -744,7 +758,6 @@ let rows (type holes item) (items : item array) (template : holes template) slot
                 decr shift;
                 reuse index (from - 1) projected)
               else (
-                Array.unsafe_set next index (Fresh ());
                 Array.unsafe_set keys index (key item [@u]);
                 Array.unsafe_set projections index
                   (match projected with Some projection -> projection | None -> project item [@u]))
@@ -774,9 +787,9 @@ let rows (type holes item) (items : item array) (template : holes template) slot
             | true, `Same ->
                 let rows = Array.copy old.rows in
                 for index = 0 to count - 1 do
-                  match Array.unsafe_get next index with
-                  | Kept from when from = index -> ()
-                  | Kept _ | Fresh _ -> Array.unsafe_set rows index (refreshed (Array.unsafe_get rows index) (drawn index))
+                  match Origin.kept_from (Array.unsafe_get next index) with
+                  | Some from when from = index -> ()
+                  | Some _ | None -> Array.unsafe_set rows index (refreshed (Array.unsafe_get rows index) (drawn index))
                 done;
                 Some (shown items keys projections rows)
             | _, (`Same | `Moved) ->
@@ -805,9 +818,9 @@ let rows (type holes item) (items : item array) (template : holes template) slot
                     done
                 | `Part -> List.iter (fun i -> drop position (Array.unsafe_get old.rows i)) plan.dropped);
                 let carried i j =
-                  match Array.unsafe_get next j with
-                  | Kept from when from = i -> Array.unsafe_get old.rows i
-                  | Kept _ | Fresh _ -> refreshed (Array.unsafe_get old.rows i) (drawn j)
+                  match Origin.kept_from (Array.unsafe_get next j) with
+                  | Some from when from = i -> Array.unsafe_get old.rows i
+                  | Some _ | None -> refreshed (Array.unsafe_get old.rows i) (drawn j)
                 in
                 let placed j before =
                   match Array.unsafe_get plan.steps j with
@@ -982,8 +995,8 @@ let controlled_hole element name =
       :: !restores;
     Dom_api.queue_microtask (fun () -> Dom_api.queue_microtask restore_controlled)
   in
-  Dom_api.add_listener element "input" restore;
-  Dom_api.add_listener element "change" restore;
+  ignore (Events.register element "input");
+  ignore (Events.register element "change");
   Dom_api.set_handler element Events.controlled restore;
   hole
 
@@ -1018,8 +1031,8 @@ let set_classes (hole : Hole.classes) value =
     hole.value <- value)
 
 let handler_hole scope element event =
-  let key, registration = Events.bind element event in
-  (match registration with
+  let key = Events.key_of event in
+  (match Events.register element event with
   | Events.Delegated -> ()
   | Events.Direct remove -> scope.cleanups <- (fun [@u] () -> remove ()) :: scope.cleanups);
   ({ element; key } : Hole.handler)
@@ -1051,8 +1064,8 @@ let put_attr scope slot element name value =
     Array.unsafe_set scope.deps slot (Input value))
 
 let listen scope element event =
-  let key, registration = Events.bind element event in
-  (match registration with
+  let key = Events.key_of event in
+  (match Events.register element event with
   | Events.Delegated -> ()
   | Events.Direct remove -> scope.cleanups <- (fun [@u] () -> remove ()) :: scope.cleanups);
   key
