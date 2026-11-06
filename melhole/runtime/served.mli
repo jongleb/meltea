@@ -13,8 +13,9 @@ type resumable
     key, submit or pointer press inside [parent]; then takes the page over as [hydrate] does and lets
     that input go on to its handlers, its target's value and checked state as the user left them. When
     the capture script kept events inside [parent] before the code arrived, the page is taken over at
-    the next microtask instead and the events are replayed, as [hydrate] does. *)
-val resumable : (unit -> View.child) -> parent:'a Dom.node_like -> resumable
+    the next microtask instead and the events are replayed, as [hydrate] does. [taken] runs right
+    after the page is taken over, before any input reaches it. *)
+val resumable : (unit -> View.child) -> taken:(unit -> unit) -> parent:'a Dom.node_like -> resumable
 
 (** The page taken over, now if nothing has taken it over yet. *)
 val resumed : resumable -> View.mounted

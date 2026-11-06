@@ -36,7 +36,7 @@ let resume =
   {
     take =
       (fun child root ->
-        let page = Served.resumable child ~parent:root in
+        let page = Served.resumable child ~taken:ignore ~parent:root in
         { shown = (fun () -> Served.resumed page); gone = (fun () -> Served.leave page) });
     carry = Initial;
   }

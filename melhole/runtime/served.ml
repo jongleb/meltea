@@ -108,7 +108,7 @@ type state =
   | Taken of View.mounted
   | Left
 
-type resumable = { child : unit -> View.child; parent : Dom.node; mutable state : state }
+type resumable = { child : unit -> View.child; taken : unit -> unit; parent : Dom.node; mutable state : state }
 
 external add_window_listener : string -> (Dom.event -> unit) -> < capture : bool > Js.t -> unit = "addEventListener"
 [@@mel.scope "window"]
@@ -123,6 +123,7 @@ let resumed page =
   let take () =
     let mounted = adopt (page.child ()) ~parent:page.parent in
     page.state <- Taken mounted;
+    page.taken ();
     mounted
   in
   match page.state with
@@ -136,17 +137,17 @@ let resumed page =
       Events.replay early;
       mounted
 
-let resumable child ~parent =
+let resumable child ~taken ~parent =
   let parent = Dom_api.to_node parent in
   match Events.early parent with
   | Some early ->
-      let page = { child; parent; state = Due early } in
+      let page = { child; taken; parent; state = Due early } in
       Dom_api.queue_microtask (fun () ->
           match page.state with Due _ -> ignore (resumed page) | Waiting _ | Taken _ | Left -> ());
       page
   | None ->
       let inputs = [ "click"; "dblclick"; "input"; "change"; "keydown"; "keyup"; "submit"; "pointerdown" ] in
-      let rec page = { child; parent; state = Waiting disarm }
+      let rec page = { child; taken; parent; state = Waiting disarm }
       and listener native =
         Option.iter
           (fun target ->
