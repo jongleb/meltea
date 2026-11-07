@@ -518,6 +518,8 @@ let selector equality chosen key = Selector { equality; chosen; key }
 
 external reused : 'drawn array -> 'item array = "%identity"
 
+let arrayed (items : 'item array) = items
+
 let reselected (type drawn item) (old_items : drawn array) (old_selectors : drawn selectors) indexes old_outer
     (items : item array) (selectors : item selectors) outer redraw =
   match (old_selectors, selectors) with

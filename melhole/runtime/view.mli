@@ -82,6 +82,9 @@ type 'frame template
 (** A compiled loop whose rows are one element each: one template, the root of a row's frame, one
     refresh taking the item, and the key of an item, shared by all rows; a row costs its nodes and
     its frame. *)
+(** The items of a loop over an array: the array itself. *)
+val arrayed : 'item array -> 'item array
+
 val rows :
   'source ->
   ('source -> 'item array) ->

@@ -1141,7 +1141,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
   let source, listed =
     match items with
     | [%expr Stdlib.Array.of_list [%e? listed]] -> (listed, [%expr Stdlib.Array.of_list])
-    | _ -> (items, [%expr Stdlib.Fun.id])
+    | _ -> (items, [%expr Melhole.View.arrayed])
   in
   match (!output, Free.closure ~definitions ~locals:frontend.locals row) with
   | Server, _ -> None
