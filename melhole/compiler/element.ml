@@ -347,9 +347,44 @@ and child frontend ~forks item =
             (Markup.Slot
                ( Child_slot,
                  forked frontend ~loc forks
-                   (match frontend.each loc item with
-                   | Some loop -> loop
-                   | None -> frontend.unwrap loc (frontend.map item)) )))
+                   (let rec branched expression =
+                      match expression.pexp_desc with
+                      | Pexp_match (scrutinee, cases)
+                        when List.for_all (fun case -> Free.bound case.pc_lhs = []) cases ->
+                          let looped = List.map (fun case -> branched case.pc_rhs) cases in
+                          Option.map
+                            (fun _ ->
+                              {
+                                expression with
+                                pexp_desc =
+                                  Pexp_match
+                                    ( frontend.map scrutinee,
+                                      List.map2
+                                        (fun case rhs ->
+                                          {
+                                            case with
+                                            pc_guard = Option.map frontend.map case.pc_guard;
+                                            pc_rhs = Option.value ~default:(frontend.unwrap loc (frontend.map case.pc_rhs)) rhs;
+                                          })
+                                        cases looped );
+                              })
+                            (List.find_map Fun.id looped)
+                      | Pexp_ifthenelse (test, yes, Some no) -> (
+                          match (branched yes, branched no) with
+                          | None, None -> None
+                          | yes_loop, no_loop ->
+                              Some
+                                {
+                                  expression with
+                                  pexp_desc =
+                                    Pexp_ifthenelse
+                                      ( frontend.map test,
+                                        Option.value ~default:(frontend.unwrap loc (frontend.map yes)) yes_loop,
+                                        Some (Option.value ~default:(frontend.unwrap loc (frontend.map no)) no_loop) );
+                                })
+                      | _ -> frontend.each loc expression
+                    in
+                    match branched item with Some loop -> loop | None -> frontend.unwrap loc (frontend.map item)) )))
 
 let row_marker = "melhole.row"
 
