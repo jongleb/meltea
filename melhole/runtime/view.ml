@@ -654,6 +654,68 @@ let each site numbering source listed render project pieces outer selectors =
                   (Each_state
                      { site; source = Input source; items; keys = old.keys; outer; projections = old.projections; lives = old.lives; selectors; indexes })
             | None ->
+            let trimmed =
+              match (count = old_count, outer_change, numbering, count) with
+              | true, _, _, _ | false, Changed, _, _ | false, Unchanged, Numbered, _ | false, Unchanged, Items, 0 -> `Rearranged
+              | false, Unchanged, Items, _ -> (
+                  let rec front index =
+                    if index < count && index < old_count && Dom_api.same (Array.unsafe_get items index) (Array.unsafe_get old.items index)
+                    then front (index + 1)
+                    else index
+                  in
+                  let from = front 0 in
+                  let rec back kept =
+                    if
+                      kept < count - from
+                      && kept < old_count - from
+                      && Dom_api.same (Array.unsafe_get items (count - 1 - kept)) (Array.unsafe_get old.items (old_count - 1 - kept))
+                    then back (kept + 1)
+                    else kept
+                  in
+                  let kept = back 0 in
+                  match (from + kept = count, from + kept = old_count) with
+                  | true, false -> `Removed (from, old_count - kept)
+                  | false, true -> `Inserted (from, count - kept)
+                  | true, true | false, false -> `Rearranged)
+            in
+            let joined before middle after = Array.concat [ before; middle; after ] in
+            let shown keys projections lives =
+              Some (Each_state { site; source = Input source; items; keys; outer; projections; lives; selectors; indexes = Unindexed })
+            in
+            match trimmed with
+            | `Removed (from, until) ->
+                for index = from to until - 1 do
+                  remove position (Array.unsafe_get old.lives index)
+                done;
+                let around whole size = joined (Array.sub whole 0 (from * size)) [||] (Array.sub whole (until * size) ((old_count - until) * size)) in
+                shown (around old.keys 1) (around old.projections pieces) (around old.lives 1)
+            | `Inserted (from, until) ->
+                let rec following index =
+                  match index = old_count with
+                  | true -> position.before
+                  | false ->
+                      let found = front (Array.unsafe_get old.lives index) Js.null in
+                      if Dom_api.same found Js.null then following (index + 1) else found
+                in
+                let at = { position with before = following from } in
+                let added = until - from in
+                let keys = Array.make added "" in
+                let built index =
+                  let child, key = rendered (from + index) (Array.unsafe_get items (from + index)) in
+                  Array.unsafe_set keys index key;
+                  child.build at [@u]
+                in
+                let lives = Array.make added (built 0) in
+                for index = 1 to added - 1 do
+                  Array.unsafe_set lives index (built index)
+                done;
+                let projections = (match added * pieces with 0 -> no_inputs | size -> Array.make size unset) in
+                for index = 0 to added - 1 do
+                  project (Array.unsafe_get items (from + index)) (from + index) projections (index * pieces) [@u]
+                done;
+                let around whole size middle = joined (Array.sub whole 0 (from * size)) middle (Array.sub whole (from * size) ((old_count - from) * size)) in
+                shown (around old.keys 1 keys) (around old.projections pieces projections) (around old.lives 1 lives)
+            | `Rearranged ->
             let in_place =
               match count = old_count with
               | false -> None
