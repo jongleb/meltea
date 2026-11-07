@@ -48,11 +48,33 @@ class mapper =
                          | _ -> None)
                        definition.pexp_attributes)
                 in
+                let hooked definition =
+                  let finder =
+                    object
+                      inherit [[ `Hooked | `Pure ]] Ast_traverse.fold as super
+
+                      method! expression expression found =
+                        match (found, expression.pexp_desc) with
+                        | `Hooked, _ -> `Hooked
+                        | `Pure, Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
+                            match Longident.last_exn txt with
+                            | "use" -> `Hooked
+                            | name
+                              when String.length name > 3
+                                   && String.equal (String.sub name 0 3) "use"
+                                   && Char.uppercase_ascii name.[3] = name.[3] ->
+                                `Hooked
+                            | _ -> super#expression expression found)
+                        | `Pure, _ -> super#expression expression found
+                    end
+                  in
+                  finder#expression definition `Pure
+                in
                 List.filter_map
                   (fun binding ->
-                    match binding.pvb_pat.ppat_desc with
-                    | Ppat_var { txt; _ } -> Some (txt, uncached binding.pvb_expr)
-                    | _ -> None)
+                    match (binding.pvb_pat.ppat_desc, hooked binding.pvb_expr) with
+                    | Ppat_var { txt; _ }, `Pure -> Some (txt, uncached binding.pvb_expr)
+                    | Ppat_var _, `Hooked | _, (`Pure | `Hooked) -> None)
                   bindings
           in
           let bindings =
