@@ -35,6 +35,8 @@ external deliver_with : deliveries -> string -> (Dom.event -> unit) -> unit = "s
 
 let deliveries = deliveries_made ()
 
+let after_controlled = ref ignore
+
 let tracked = "$$melhole:tracked"
 
 let shown element =
@@ -86,7 +88,12 @@ let delegate event =
         match event with
         | "input" | "change" | "onchange" ->
             Option.iter
-              (fun target -> Option.iter (fun restore -> restore native) (Dom_api.handler target controlled))
+              (fun target ->
+                Option.iter
+                  (fun restore ->
+                    !after_controlled ();
+                    restore native)
+                  (Dom_api.handler target controlled))
               (Dom_api.target native)
         | _ -> ()
       in

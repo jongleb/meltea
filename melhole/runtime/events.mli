@@ -28,6 +28,10 @@ val delegate : string -> unit
     when what the element shows differs from what was recorded. *)
 val track : Dom.element -> unit
 
+(** Runs after the handlers of an [input] or [change] event on a controlled field, before its value
+    is put back: Melact renders there at once, as React does with [flushSync] for controlled inputs. *)
+val after_controlled : (unit -> unit) ref
+
 val listen : Dom.element -> string -> unit
 
 val unlisten : Dom.element -> string -> unit
