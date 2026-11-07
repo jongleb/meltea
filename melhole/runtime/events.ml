@@ -14,17 +14,25 @@ let paced event handle native =
           raise error)
   | _ -> handle native
 
+let copy : string =
+  [%mel.raw
+    {|(function () {
+        var copies = (globalThis.__melhole_copies || 0) + 1;
+        globalThis.__melhole_copies = copies;
+        return copies === 1 ? "$$melhole" : "$$melhole" + copies;
+      })()|}]
+
 let keys = ref []
 
 let key_of event =
   match List.find_map (fun (known, key) -> if String.equal known event then Some key else None) !keys with
   | Some key -> key
   | None ->
-      let key = "$$melhole:" ^ event in
+      let key = copy ^ ":" ^ event in
       keys := (event, key) :: !keys;
       key
 
-let controlled = "$$melhole:controlled"
+let controlled = copy ^ ":controlled"
 
 (** A JavaScript [Map] from a delegated event to the [document] listener that delivers it. *)
 type deliveries
@@ -37,7 +45,7 @@ let deliveries = deliveries_made ()
 
 let after_controlled = ref ignore
 
-let tracked = "$$melhole:tracked"
+let tracked = copy ^ ":tracked"
 
 let shown element =
   match Js.Undefined.toOption (Dom_api.property element "type" : string Js.undefined) with
@@ -125,7 +133,7 @@ let removal_of event =
   match List.find_map (fun (known, key) -> if String.equal known event then Some key else None) !removals with
   | Some key -> key
   | None ->
-      let key = "$$melhole:off:" ^ event in
+      let key = copy ^ ":off:" ^ event in
       removals := (event, key) :: !removals;
       key
 
