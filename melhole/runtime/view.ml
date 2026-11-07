@@ -1007,8 +1007,91 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                       | true -> in_place (index + 1)
                       | false -> `Rearranged))
             in
-            match (count = old_count, match count = old_count with true -> in_place 0 | false -> `Rearranged) with
-            | true, `In_place ->
+            let shuffled () =
+              let rec differing index found size =
+                match (index = count, size) with
+                | true, _ -> Some (Array.of_list (List.rev found))
+                | false, 64 -> None
+                | false, _ -> (
+                    let item = Array.unsafe_get items index in
+                    match Dom_api.same item (Array.unsafe_get old.items index) with
+                    | true -> differing (index + 1) found size
+                    | false -> (
+                        let named = key item [@u] in
+                        match String.equal named (Array.unsafe_get old.keys index) with
+                        | true -> differing (index + 1) found size
+                        | false -> differing (index + 1) ((index, named) :: found) (size + 1)))
+              in
+              Option.bind (differing 0 [] 0) (fun moved ->
+                  let size = Array.length moved in
+                  let sources = Array.make size (-1) in
+                  let rec claim at =
+                    match at = size with
+                    | true -> Some (moved, Array.map (fun source -> fst (Array.unsafe_get moved source)) sources)
+                    | false -> (
+                        let wanted = snd (Array.unsafe_get moved at) in
+                        let rec free source =
+                          match source = size with
+                          | true -> None
+                          | false -> (
+                              match
+                                ( String.equal wanted (Array.unsafe_get old.keys (fst (Array.unsafe_get moved source))),
+                                  Array.exists (fun claimed -> claimed = source) sources )
+                              with
+                              | true, false -> Some source
+                              | true, true | false, _ -> free (source + 1))
+                        in
+                        Option.bind (free 0) (fun source ->
+                            Array.unsafe_set sources at source;
+                            claim (at + 1)))
+                  in
+                  claim 0)
+            in
+            let arrangement =
+              match (count = old_count, outer_change) with
+              | false, _ -> `Rearranged
+              | true, Changed -> in_place 0
+              | true, Unchanged -> (
+                  match in_place 0 with
+                  | `In_place -> `In_place
+                  | `Rearranged -> Option.fold ~none:`Rearranged ~some:(fun found -> `Shuffled found) (shuffled ()))
+            in
+            match arrangement with
+            | `Shuffled (moved, sources) ->
+                let frames = old.frames and projections = old.projections and keys = old.keys in
+                let taken = Array.map (fun source -> Array.unsafe_get frames source) sources in
+                let was = Array.map (fun source -> Array.unsafe_get old.items source) sources in
+                let ahead = ref 0 in
+                for index = 0 to count - 1 do
+                  match (!ahead < Array.length moved && fst (Array.unsafe_get moved !ahead) = index, Dom_api.same (Array.unsafe_get items index) (Array.unsafe_get old.items index)) with
+                  | true, _ -> incr ahead
+                  | false, true -> ()
+                  | false, false ->
+                      let item = Array.unsafe_get items index in
+                      project item index projections (index * pieces) [@u];
+                      Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) item)
+                done;
+                Array.iteri
+                  (fun at (index, named) ->
+                    let item = Array.unsafe_get items index in
+                    Array.unsafe_set keys index named;
+                    project item index projections (index * pieces) [@u];
+                    Array.unsafe_set frames index
+                      (match Dom_api.same item (Array.unsafe_get was at) with
+                      | true -> Array.unsafe_get taken at
+                      | false -> refreshed (Array.unsafe_get taken at) item))
+                  moved;
+                for at = Array.length moved - 1 downto 0 do
+                  let index = fst (Array.unsafe_get moved at) in
+                  let before =
+                    match index + 1 = count with
+                    | true -> position.before
+                    | false -> Js.Null.return (root_of (Array.unsafe_get frames (index + 1)))
+                  in
+                  move position.parent (root_of (Array.unsafe_get frames index)) before
+                done;
+                Some (shown items keys projections frames Unindexed)
+            | `In_place ->
                 let frames = old.frames and projections = old.projections and indexes = ref old.indexes in
                 for index = 0 to count - 1 do
                   let item = Array.unsafe_get items index and at = index * pieces in
@@ -1021,7 +1104,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                       Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) item)
                 done;
                 Some (shown items old.keys projections frames !indexes)
-            | _, (`In_place | `Rearranged) ->
+            | `Rearranged ->
             let next = Array.make count Origin.fresh and keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
             let projections = (match count * pieces with 0 -> no_inputs | size -> Array.make size unset) in
             let fits from item =
