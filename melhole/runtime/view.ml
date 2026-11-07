@@ -1065,11 +1065,12 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                   match Dom_api.same item (Array.unsafe_get old.items index) with
                   | true -> in_place (index + 1)
                   | false -> (
-                      match String.equal (key item [@u]) (Array.unsafe_get old.keys index) with
+                      let named = key item [@u] in
+                      match String.equal named (Array.unsafe_get old.keys index) with
                       | true -> in_place (index + 1)
-                      | false -> `Rearranged))
+                      | false -> `Rearranged_at (index, named)))
             in
-            let shuffled () =
+            let shuffled (first, named) =
               let rec differing index found size =
                 match (index = count, size) with
                 | true, _ -> Some (Array.of_list (List.rev found))
@@ -1084,12 +1085,12 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                         | true -> differing (index + 1) found size
                         | false -> differing (index + 1) ((index, named) :: found) (size + 1)))
               in
-              Option.bind (differing 0 [] 0) (fun moved ->
+              Option.bind (differing (first + 1) [ (first, named) ] 1) (fun moved ->
                   let size = Array.length moved in
                   let sources = Array.make size (-1) in
                   let rec claim at =
                     match at = size with
-                    | true -> Some (moved, Array.map (fun source -> fst (Array.unsafe_get moved source)) sources)
+                    | true -> Some (moved, sources)
                     | false -> (
                         let wanted = snd (Array.unsafe_get moved at) in
                         let rec free source =
@@ -1135,11 +1136,11 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
               match (count = old_count, outer_change) with
               | false, Unchanged -> trimmed ()
               | false, Changed -> `Rearranged
-              | true, Changed -> in_place 0
+              | true, Changed -> ( match in_place 0 with `In_place -> `In_place | `Rearranged_at _ -> `Rearranged)
               | true, Unchanged -> (
                   match in_place 0 with
                   | `In_place -> `In_place
-                  | `Rearranged -> Option.fold ~none:`Rearranged ~some:(fun found -> `Shuffled found) (shuffled ()))
+                  | `Rearranged_at first -> Option.fold ~none:`Rearranged ~some:(fun found -> `Shuffled found) (shuffled first))
             in
             let joined before middle after = Array.concat [ before; middle; after ] in
             match arrangement with
@@ -1171,10 +1172,44 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                 done;
                 let around whole size middle = joined (Array.sub whole 0 (from * size)) middle (Array.sub whole (from * size) ((old_count - from) * size)) in
                 Some (shown items (around old.keys 1 keys) (around old.projections pieces projections) (around old.frames 1 frames) Unindexed)
-            | `Shuffled (moved, sources) ->
+            | `Shuffled (moved, claimed) ->
                 let frames = old.frames and projections = old.projections and keys = old.keys in
+                let sources = Array.map (fun source -> fst (Array.unsafe_get moved source)) claimed in
                 let taken = Array.map (fun source -> Array.unsafe_get frames source) sources in
                 let was = Array.map (fun source -> Array.unsafe_get old.items source) sources in
+                let size = Array.length moved in
+                let settled =
+                  let lengths = Array.make size 0 and previous = Array.make size (-1) in
+                  for at = 0 to size - 1 do
+                    match fst (Array.unsafe_get moved at) - at = Array.unsafe_get sources at - Array.unsafe_get claimed at with
+                    | false -> ()
+                    | true ->
+                        Array.unsafe_set lengths at 1;
+                        for before = 0 to at - 1 do
+                          if
+                            Array.unsafe_get lengths before > 0
+                            && Array.unsafe_get sources before < Array.unsafe_get sources at
+                            && Array.unsafe_get lengths before + 1 > Array.unsafe_get lengths at
+                          then (
+                            Array.unsafe_set lengths at (Array.unsafe_get lengths before + 1);
+                            Array.unsafe_set previous at before)
+                        done
+                  done;
+                  let best = ref (-1) in
+                  Array.iteri
+                    (fun at length -> if length > 0 && (!best < 0 || length > Array.unsafe_get lengths !best) then best := at)
+                    lengths;
+                  let settled = Array.make size `Moves in
+                  let rec keep at =
+                    match at < 0 with
+                    | true -> ()
+                    | false ->
+                        Array.unsafe_set settled at `Stays;
+                        keep (Array.unsafe_get previous at)
+                  in
+                  keep !best;
+                  settled
+                in
                 let ahead = ref 0 in
                 for index = 0 to count - 1 do
                   match (!ahead < Array.length moved && fst (Array.unsafe_get moved !ahead) = index, Dom_api.same (Array.unsafe_get items index) (Array.unsafe_get old.items index)) with
@@ -1195,14 +1230,17 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                       | true -> Array.unsafe_get taken at
                       | false -> refreshed (Array.unsafe_get taken at) item))
                   moved;
-                for at = Array.length moved - 1 downto 0 do
-                  let index = fst (Array.unsafe_get moved at) in
-                  let before =
-                    match index + 1 = count with
-                    | true -> position.before
-                    | false -> Js.Null.return (root_of (Array.unsafe_get frames (index + 1)))
-                  in
-                  move position.parent (root_of (Array.unsafe_get frames index)) before
+                for at = size - 1 downto 0 do
+                  match Array.unsafe_get settled at with
+                  | `Stays -> ()
+                  | `Moves ->
+                      let index = fst (Array.unsafe_get moved at) in
+                      let before =
+                        match index + 1 = count with
+                        | true -> position.before
+                        | false -> Js.Null.return (root_of (Array.unsafe_get frames (index + 1)))
+                      in
+                      move position.parent (root_of (Array.unsafe_get frames index)) before
                 done;
                 Some (shown items keys projections frames Unindexed)
             | `In_place ->
@@ -1449,16 +1487,24 @@ let prop_hole element name : Hole.prop = { element; name; value = unset; echo = 
 let set_prop (hole : Hole.prop) value =
   let (Input old) = hole.value in
   if not (Dom_api.same old value) then (
+    let shown name =
+      match (Dom_api.same hole.value unset, Dom_api.same (Dom_api.property hole.element name) value) with
+      | false, true -> ()
+      | true, _ | false, false -> Dom_api.set_property hole.element name value
+    in
     (match (!medium.adoption, hole.name, Dom_api.same hole.value unset) with
     | Server_nodes, "innerHTML", true -> ()
-    | _ -> Dom_api.set_property hole.element hole.name value);
+    | _ -> (
+        match hole.echo with
+        | Default_value -> shown hole.name
+        | Alone | Default_checked_at_mount | Select_value -> Dom_api.set_property hole.element hole.name value));
     (match hole.echo with
     | Alone -> ()
     | Default_value -> (
         Events.track hole.element;
         match (Dom_api.property hole.element "type" : string) with
         | "number" when Dom_api.same (Dom_api.active_element Dom_api.document) (Js.Null.return hole.element) -> ()
-        | _ -> Dom_api.set_property hole.element "defaultValue" value)
+        | _ -> shown "defaultValue")
     | Default_checked_at_mount -> (
         Events.track hole.element;
         match Dom_api.same hole.value unset with
@@ -1525,8 +1571,21 @@ let set_style (hole : Hole.style) value =
       | true, _ -> Dom_api.set_style_property style name value ""
       | false, _ -> Dom_api.set_style style name value
     in
-    List.iter (fun (name, _) -> written name "") hole.value;
-    List.iter (fun (name, value) -> written name value) value;
+    List.iter
+      (fun (name, _) ->
+        match List.exists (fun (next, _) -> String.equal next name) value with
+        | true -> ()
+        | false -> written name "")
+      hole.value;
+    let shown name properties =
+      List.fold_left (fun found (named, value) -> match String.equal named name with true -> Some value | false -> found) None properties
+    in
+    List.iter
+      (fun (name, next) ->
+        match (shown name hole.value, shown name value) with
+        | Some last, Some wanted when String.equal last next && String.equal wanted next -> ()
+        | (Some _ | None), _ -> written name next)
+      value;
     hole.value <- value)
 
 let classes_hole element : Hole.classes = { element; value = [] }

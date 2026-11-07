@@ -139,7 +139,20 @@ let rec without_empty_style shown =
       | Element_shape (tag, attributes, children) ->
           Element_shape
             ( tag,
-              List.filter (fun (name, value) -> not (String.equal name "style" && String.equal value "")) attributes,
+              List.filter_map
+                (fun (name, value) ->
+                  match (name, value) with
+                  | "style", "" -> None
+                  | "style", _ ->
+                      Some
+                        ( name,
+                          String.concat "; "
+                            (List.sort compare
+                               (List.filter
+                                  (fun declaration -> not (String.equal declaration ""))
+                                  (List.map String.trim (String.split_on_char ';' value)))) )
+                  | _ -> Some (name, value))
+                attributes,
               without_empty_style children )
       | Text_shape _ -> shape)
     shown
