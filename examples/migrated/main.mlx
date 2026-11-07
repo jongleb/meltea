@@ -1,0 +1,101 @@
+(** Which items the list shows. *)
+type filter = All | Active | Done
+
+type item = { id : int; title : string; finished : bool; stars : int }
+
+type model = {
+  items : item list;
+  draft : string;
+  next : int;
+  filter : filter;
+  hover : (int * int) option;  (** The item and the star the pointer is over. *)
+}
+
+type message =
+  | Type of string
+  | Add
+  | Toggle of int
+  | Remove of int
+  | Rate of int * int
+  | Hover of (int * int) option
+  | Show of filter
+  | Keep
+
+let init = { items = []; draft = ""; next = 0; filter = All; hover = None }
+
+let update message model =
+  match message with
+  | Type draft -> { model with draft }
+  | Add -> (
+      match String.trim model.draft with
+      | "" -> model
+      | title ->
+          {
+            model with
+            items = model.items @ [ { id = model.next; title; finished = false; stars = 0 } ];
+            draft = "";
+            next = model.next + 1;
+          })
+  | Toggle id ->
+      { model with items = List.map (fun item -> if item.id = id then { item with finished = not item.finished } else item) model.items }
+  | Remove id -> { model with items = List.filter (fun item -> item.id <> id) model.items }
+  | Rate (id, stars) -> { model with items = List.map (fun item -> if item.id = id then { item with stars } else item) model.items }
+  | Hover hover -> { model with hover }
+  | Show filter -> { model with filter }
+  | Keep -> model
+
+let stars hover item =
+  let shown = Option.fold ~none:item.stars ~some:(fun (id, star) -> if id = item.id then star else item.stars) hover in
+  <span className="stars" onMouseLeave=(Hover None)>
+    (Html.list
+       (List.init 5 (fun index ->
+            let value = index + 1 in
+            <button
+              key=(string_of_int value)
+              className=(if value <= shown then "star on" else "star")
+              onMouseEnter=(Hover (Some (item.id, value)))
+              onClick=(Rate (item.id, value))>
+              (Html.text "★")
+            </button>)))
+  </span>
+
+let row hover item =
+  <li key=(string_of_int item.id) className=(if item.finished then "done" else "")>
+    <input type_="checkbox" checked=item.finished onCheck=(fun _ -> Toggle item.id) />
+    <span className="title">(Html.text item.title)</span>
+    (stars hover item)
+    <button className="remove" onClick=(Remove item.id)>(Html.text "×")</button>
+  </li>
+
+let tab filter label value =
+  <button className=(if filter = value then "tab on" else "tab") onClick=(Show value)>(Html.text label)</button>
+
+let view model =
+  let shown =
+    List.filter
+      (fun item -> match model.filter with All -> true | Active -> not item.finished | Done -> item.finished)
+      model.items
+  in
+  <main>
+    <header>
+      <h1>(Html.text "Migrated")</h1>
+      <nav>(tab model.filter "All" All) (tab model.filter "Active" Active) (tab model.filter "Done" Done)</nav>
+      <p className="total">(Html.text (string_of_int (List.length model.items) ^ " items"))</p>
+    </header>
+    <section className="todos">
+      <input
+        className="new"
+        placeholder="What needs doing?"
+        value=model.draft
+        onInput=(fun text -> Type text)
+        onKeyDown=(fun key -> match key with "Enter" -> Add | _ -> Keep) />
+      <ul>(Html.list (List.map (row model.hover) shown))</ul>
+    </section>
+  </main>
+
+external document : Dom.document = "document"
+
+external element_by_id : Dom.document -> string -> Dom.element option = "getElementById"
+[@@mel.send] [@@mel.return nullable]
+
+let () = Option.iter (fun root -> ignore (Program.sandbox ~init ~update ~view root)) (element_by_id document "root")

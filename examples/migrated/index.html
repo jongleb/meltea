@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Migrated: the same app in Meltea alone</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 16px; }
+      header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+      h1 { margin: 0 auto 0 0; font-size: 1.6rem; }
+      .tab { border: 1px solid #ccc; background: none; padding: 2px 10px; border-radius: 999px; }
+      .tab.on { background: #222; color: #fff; }
+      .todos .new { width: 100%; font-size: 1.1rem; padding: 8px; margin: 16px 0; box-sizing: border-box; }
+      .todos ul { list-style: none; padding: 0; }
+      .todos li { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid #eee; }
+      .todos li.done .title { text-decoration: line-through; color: #888; }
+      .todos .title { flex: 1; }
+      .star { border: none; background: none; color: #ccc; font-size: 1.1rem; padding: 0 1px; }
+      .star.on { color: #e6a700; }
+      .remove { border: none; background: none; color: #c33; font-size: 1.1rem; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/_build/default/examples/migrated/output/examples/migrated/main.mjs"></script>
+  </body>
+</html>
