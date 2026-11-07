@@ -22,6 +22,7 @@ let mapper =
       {
         Element.name = "meltea";
         locals = "__melhole_dispatch" :: self#locals;
+        definitions = self#definitions;
         map = self#expression;
         wrap = (fun loc child -> [%expr Html.node (fun __melhole_dispatch -> [%e child])]);
         unwrap =

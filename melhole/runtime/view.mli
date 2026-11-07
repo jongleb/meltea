@@ -59,7 +59,8 @@ val loop_site : unit -> loop_site
 val each :
   loop_site ->
   numbering ->
-  'item array ->
+  'source ->
+  ('source -> 'item array) ->
   ('item -> int -> child[@u]) ->
   ('item -> int -> input array -> int -> unit[@u]) ->
   int ->
@@ -82,7 +83,8 @@ type 'frame template
     refresh taking the item, and the key of an item, shared by all rows; a row costs its nodes and
     its frame. *)
 val rows :
-  'item array ->
+  'source ->
+  ('source -> 'item array) ->
   'frame template ->
   ('frame -> Dom.element[@u]) ->
   ('frame -> 'item -> unit[@u]) ->

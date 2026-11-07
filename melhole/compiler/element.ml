@@ -48,6 +48,7 @@ let output = ref Client_only
 type frontend = {
   name : string;
   locals : string list;
+  definitions : (string * expression) list;  (** Local lets in scope with their values. *)
   map : expression -> expression;
   wrap : location -> expression -> expression;
   unwrap : location -> expression -> expression;
@@ -734,7 +735,19 @@ let lowercase frontend ~loc ~attributes tag arguments =
         | At_position (_, _, _, value) ->
             match Free.of_expression value with
             | Free.Reads names ->
-                Free.Reads (List.filter (fun name -> List.mem name frontend.locals) names)
+                Free.Reads
+                  (List.sort_uniq String.compare
+                     (List.concat_map
+                        (fun name ->
+                          match
+                            Option.map (fun definition -> definition.pexp_desc) (List.assoc_opt name frontend.definitions)
+                          with
+                          | Some (Pexp_function _) -> (
+                              match Free.closure ~definitions:frontend.definitions ~locals:frontend.locals (evar ~loc name) with
+                              | Free.Reads captured -> captured
+                              | Free.Volatile -> [ name ])
+                          | Some _ | None -> [ name ])
+                        (List.filter (fun name -> List.mem name frontend.locals) names)))
             | Free.Volatile -> Free.Volatile)
       holes
   in
@@ -1125,6 +1138,11 @@ let lowercase frontend ~loc ~attributes tag arguments =
 type numbering = Items | Numbered
 
 let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
+  let source, listed =
+    match items with
+    | [%expr Stdlib.Array.of_list [%e? listed]] -> (listed, [%expr Stdlib.Array.of_list])
+    | _ -> (items, [%expr Stdlib.Fun.id])
+  in
   match (!output, Free.closure ~definitions ~locals:frontend.locals row) with
   | Server, _ -> None
   | (Client_only | Hydratable), closure ->
@@ -1354,7 +1372,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                         in
                         let loop =
                           [%expr
-                            Melhole.View.rows [%e items] [%e template] [%e root] [%e refresh]
+                            Melhole.View.rows [%e source] [%e listed] [%e template] [%e root] [%e refresh]
                               [%e uncurried [%expr fun __melhole_item -> [%e given key]]]
                               [%e project] [%e pieces] [%e outer] [%e selectors]]
                         in
@@ -1372,7 +1390,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
               Melhole.View.each
                 [%e Hoist.hoist ~loc "site" [%expr Melhole.View.loop_site ()]]
                 [%e match numbering with Items -> [%expr Melhole.View.Items] | Numbered -> [%expr Melhole.View.Numbered]]
-                [%e items]
+                [%e source] [%e listed]
                 [%e
                   pexp_record ~loc
                     [
