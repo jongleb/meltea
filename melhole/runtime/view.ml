@@ -1166,7 +1166,11 @@ module Hole = struct
   type attr = { element : Dom.element; name : string; mutable value : string option }
   (** What else a property write updates: React keeps an input's [value] attribute in step, and
       gives a checkbox the [checked] attribute it had when mounted. *)
-  type echo = Alone | Default_value | Default_checked_at_mount
+  type echo =
+    | Alone
+    | Default_value
+    | Default_checked_at_mount
+    | Select_value  (** Set again once the whole write is done, when the select's options exist. *)
 
   type prop = { element : Dom.element; name : string; mutable value : input; echo : echo }
   type style = { element : Dom.element; mutable value : (string * string) list }
@@ -1199,6 +1203,10 @@ let set_attr (hole : Hole.attr) value =
     | None -> Dom_api.remove_attribute hole.element hole.name);
     hole.value <- value)
 
+let attachments = ref []
+let writing = ref 0
+let attach_later attach = attachments := attach :: !attachments
+
 let prop_hole element name : Hole.prop = { element; name; value = unset; echo = Alone }
 
 let set_prop (hole : Hole.prop) value =
@@ -1216,7 +1224,12 @@ let set_prop (hole : Hole.prop) value =
     | Default_checked_at_mount -> (
         match Dom_api.same hole.value unset with
         | true -> Dom_api.set_property hole.element "defaultChecked" value
-        | false -> ()));
+        | false -> ())
+    | Select_value ->
+        attach_later (fun () ->
+            let (Input chosen) = hole.value in
+            if not (Dom_api.same (Dom_api.property hole.element "value") chosen) then
+              Dom_api.set_property hole.element "value" chosen));
     hole.value <- Input value)
 
 external html_of : < __html : string > Js.t -> string = "__html" [@@mel.get]
@@ -1238,6 +1251,7 @@ let controlled_hole element name =
         (match (name, Dom_api.node_name (Dom_api.to_node element)) with
         | "value", ("INPUT" | "TEXTAREA") -> Default_value
         | "checked", "INPUT" -> Default_checked_at_mount
+        | "value", "SELECT" -> Select_value
         | _ -> Alone);
     }
   in
@@ -1341,9 +1355,6 @@ let put_linked element key link dispatch data =
         (fun event -> link.body (Dom_api.property (Dom_api.current_target event) link.data_key) dispatch event [@u]));
   Events.set element key link.handler
 
-let attachments = ref []
-let writing = ref 0
-let attach_later attach = attachments := attach :: !attachments
 
 let attach_references () =
   let pending = !attachments in
