@@ -31,3 +31,6 @@ let target_value event = value (target event)
 let target_checked event = checked (target event)
 let key event = event_key event
 let prevent_default event = prevent event
+
+let chunks ?(size = 100) ?(row_height = 40) ?(tag = "div") views dispatch =
+  Melhole.View.chunks ~size ~row_height ~tag (Melhole.View.list (List.map (fun view -> view dispatch) views))

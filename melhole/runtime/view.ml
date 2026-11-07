@@ -1693,3 +1693,122 @@ let hosted (type value) (hosting : value hosting) live : value option =
   | Hosted (held, value) -> (
       match Witness.equal held.kind hosting.kind with Some Equal -> Some value | None -> None)
   | _ -> None
+
+(** The groups of a chunked list, each a wrapper element and the keyed rows inside it. *)
+type chunked = { mutable groups : (Dom.element * live) array }
+
+let chunking =
+  lazy
+    (hosting
+       ~visit:(fun [@u] chunked visit ->
+         Array.iter (fun (wrapper, _) -> visit (Dom_api.to_node wrapper) [@u]) chunked.groups)
+       ~first:(fun [@u] chunked after ->
+         match chunked.groups with [||] -> after | groups -> Js.Null.return (Dom_api.to_node (fst (Array.unsafe_get groups 0))))
+       ~let_go:(fun [@u] chunked -> Array.iter (fun (_, live) -> release live) chunked.groups))
+
+let chunks ~size ~row_height ~tag child =
+  let entries =
+    Array.of_list
+      (List.mapi
+         (fun index row -> match row.shape with Entry (key, inner) -> (key, inner) | _ -> (string_of_int index, row))
+         (items child))
+  in
+  let count = (Array.length entries + size - 1) / size in
+  let group index = keyed (Array.to_list (Array.sub entries (index * size) (min size (Array.length entries - (index * size))))) in
+  let wrapper () =
+    let element = Dom_api.create_element Dom_api.document tag in
+    Dom_api.set_attribute element "style"
+      ("content-visibility:auto;contain-intrinsic-size:auto " ^ string_of_int (size * row_height) ^ "px");
+    element
+  in
+  let made (position : Template.position) index =
+    let element = wrapper () in
+    insert position (Dom_api.to_node element);
+    (element, build (group index) { parent = Dom_api.to_node element; before = Js.null })
+  in
+  host
+    ~build:(fun [@u] position -> live (Lazy.force chunking) { groups = Array.init count (made position) })
+    ~patch:(fun [@u] position current ->
+      Option.map
+        (fun chunked ->
+          let old = chunked.groups in
+          let kept = min count (Array.length old) in
+          let slice index = Array.sub entries (index * size) (min size (Array.length entries - (index * size))) in
+          let same_keys index =
+            match snd (Array.unsafe_get old index) with
+            | Keyed_state (keys, _) -> (
+                let next = slice index in
+                match Array.length keys = Array.length next with
+                | true -> (
+                    match Array.for_all2 (fun key (next_key, _) -> String.equal key next_key) keys next with
+                    | true -> `Same
+                    | false -> `Changed)
+                | false -> `Changed)
+            | _ -> `Changed
+          in
+          let sameness = Array.init kept same_keys in
+          let pool = Keyed.make () and pooled = ref [] in
+          Array.iteri
+            (fun index (_, rows) ->
+              match (index < kept && Array.unsafe_get sameness index = `Same, rows) with
+              | true, _ -> ()
+              | false, Keyed_state (keys, items) ->
+                  Array.iteri
+                    (fun at key ->
+                      Keyed.set pool key (List.length !pooled);
+                      pooled := (key, Array.unsafe_get items at) :: !pooled)
+                    keys
+              | false, _ -> ())
+            old;
+          let pooled = Array.of_list (List.rev !pooled) in
+          let claimed = Array.make (Array.length pooled) `Free in
+          let regrouped element index =
+            let rows = slice index in
+            let into = { Template.parent = Dom_api.to_node element; before = Js.null } in
+            let items =
+              Array.map
+                (fun (key, child) ->
+                  match Keyed.find pool key with
+                  | at when at >= 0 && Array.unsafe_get claimed at = `Free ->
+                      Array.unsafe_set claimed at `Taken;
+                      let live = update into (snd (Array.unsafe_get pooled at)) child in
+                      visit live (fun [@u] node -> move into.parent node into.before);
+                      live
+                  | _ -> child.build into [@u])
+                rows
+            in
+            (element, Keyed_state (Array.map fst rows, items))
+          in
+          let after =
+            match kept with
+            | 0 -> position
+            | _ -> { position with before = Js.Null.fromOption (Dom_api.next_sibling (fst (Array.unsafe_get old (kept - 1)))) }
+          in
+          let groups =
+            Array.init count (fun index ->
+                match index < kept with
+                | true -> (
+                    let element, rows = Array.unsafe_get old index in
+                    match Array.unsafe_get sameness index with
+                    | `Same -> (element, update { parent = Dom_api.to_node element; before = Js.null } rows (group index))
+                    | `Changed -> regrouped element index)
+                | false ->
+                    let element = wrapper () in
+                    insert after (Dom_api.to_node element);
+                    regrouped element index)
+          in
+          Array.iteri
+            (fun at (_, live) ->
+              match Array.unsafe_get claimed at with
+              | `Taken -> ()
+              | `Free ->
+                  visit live (fun [@u] node -> Option.iter (fun parent -> Dom_api.remove_child parent node) (Dom_api.parent_node node));
+                  release live)
+            pooled;
+          Array.iteri
+            (fun index (element, _) ->
+              match index < kept with true -> () | false -> Dom_api.remove_child position.parent element)
+            old;
+          chunked.groups <- groups;
+          current)
+        (hosted (Lazy.force chunking) current))

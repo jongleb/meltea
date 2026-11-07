@@ -13,6 +13,13 @@ val int : int -> 'msg t
 val float : float -> 'msg t
 val list : 'msg t list -> 'msg t
 val keyed : (string * 'msg t) list -> 'msg t
+
+(** A long list cut into groups of [size] rows (default 100), each a [tag] element (default
+    ["div"]) with [content-visibility: auto] and a height estimate from [row_height] pixels
+    (default 40): the browser skips style, layout and paint of the groups out of view. The groups
+    change the DOM, so selectors such as [:nth-child] see them; a row that moves to another group is
+    made again. *)
+val chunks : ?size:int -> ?row_height:int -> ?tag:string -> 'msg t list -> 'msg t
 val transition : name:string -> ?duration:int -> 'msg t -> 'msg t
 val transition_group : name:string -> ?duration:int -> 'msg t -> 'msg t
 val map : ('a -> 'b) -> 'a t -> 'b t

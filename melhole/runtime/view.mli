@@ -297,3 +297,9 @@ val memory : unit -> 'value memory
 
 (** The remembered value when every input is the one it was computed from ([===]), else a new one. *)
 val remember : 'value memory -> input array -> (unit -> 'value) -> 'value
+
+(** A long list cut into groups of [size] rows, each a [tag] element with [content-visibility: auto]
+    and a height estimate of [size * row_height] pixels, so that the browser skips the style, layout
+    and paint of groups out of view. Rows keep their keys within a group; a row that moves to
+    another group is made again there. *)
+val chunks : size:int -> row_height:int -> tag:string -> child -> child
