@@ -23,6 +23,11 @@ val register : Dom.element -> string -> registration
     once, not per element. *)
 val delegate : string -> unit
 
+(** Records what an input or textarea shows now, its value or checked state, as React's value
+    tracker does: [onchange], React's [onChange] on those, delivers an [input] or [change] event only
+    when what the element shows differs from what was recorded. *)
+val track : Dom.element -> unit
+
 val listen : Dom.element -> string -> unit
 
 val unlisten : Dom.element -> string -> unit

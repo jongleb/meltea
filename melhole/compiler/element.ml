@@ -271,6 +271,8 @@ let rec analyse frontend ~loc ~forks tag arguments =
             | Some _, "option" when String.equal name "value" -> Some (Dom_props.Attribute ("value", Text))
             | Some _, "textarea" when String.equal name "defaultValue" && not (!output = Server) ->
                 Some (Dom_props.Property ("defaultValue", Text))
+            | Some _, "select" when String.equal name "onChange" -> Some (Dom_props.Handler "change")
+            | Some _, ("input" | "textarea") when String.equal name "onChange" -> Some (Dom_props.Handler "onchange")
             | Some parsed, _ -> Some (Dom_props.kind parsed)
             | None, _ -> frontend.extra name
           with

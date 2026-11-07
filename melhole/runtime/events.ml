@@ -35,14 +35,24 @@ external deliver_with : deliveries -> string -> (Dom.event -> unit) -> unit = "s
 
 let deliveries = deliveries_made ()
 
+let tracked = "$$melhole:tracked"
+
+let shown element =
+  match Js.Undefined.toOption (Dom_api.property element "type" : string Js.undefined) with
+  | Some ("checkbox" | "radio") -> (match (Dom_api.property element "checked" : bool) with true -> "on" | false -> "off")
+  | Some _ | None -> Option.value ~default:"" (Js.Undefined.toOption (Dom_api.property element "value" : string Js.undefined))
+
+let track element = Dom_api.set_property element tracked (shown element)
+
 let delegate event =
   match Js.Undefined.toOption (delivery deliveries event) with
   | Some _ -> ()
-  | None ->
+  | None -> (
       let key = key_of event in
       let pointing =
         match event with "click" | "dblclick" | "mousedown" | "mousemove" | "mouseup" -> `Mouse | _ -> `Other
       in
+      let tracking = match event with "onchange" -> `Tracking | _ -> `Untracked in
       let deliver native =
         let rec bubble node =
           Option.iter
@@ -51,9 +61,21 @@ let delegate event =
               | `Mouse, ("BUTTON" | "INPUT" | "SELECT" | "TEXTAREA")
                 when (Dom_api.property (Dom_api.unsafe_element node) "disabled" : bool) ->
                   ()
-              | (`Mouse | `Other), _ ->
-                  Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
-                  paced event handle native)
+              | (`Mouse | `Other), _ -> (
+                  let deliver () =
+                    Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
+                    paced event handle native
+                  in
+                  match tracking with
+                  | `Untracked -> deliver ()
+                  | `Tracking -> (
+                      let element = Dom_api.unsafe_element node in
+                      let now = shown element in
+                      match Js.Undefined.toOption (Dom_api.property element tracked : string Js.undefined) with
+                      | Some before when String.equal before now -> ()
+                      | Some _ | None ->
+                          Dom_api.set_property element tracked now;
+                          deliver ())))
             (Dom_api.handler node key);
           match Dom_api.cancel_bubble native with
           | true -> ()
@@ -62,14 +84,18 @@ let delegate event =
         Option.iter bubble (Dom_api.target native);
         Dom_api.release_current_target native;
         match event with
-        | "input" | "change" ->
+        | "input" | "change" | "onchange" ->
             Option.iter
               (fun target -> Option.iter (fun restore -> restore native) (Dom_api.handler target controlled))
               (Dom_api.target native)
         | _ -> ()
       in
       deliver_with deliveries event deliver;
-      Dom_api.add_document_listener Dom_api.document event deliver
+      match event with
+      | "onchange" ->
+          Dom_api.add_document_listener Dom_api.document "input" deliver;
+          Dom_api.add_document_listener Dom_api.document "change" deliver
+      | _ -> Dom_api.add_document_listener Dom_api.document event deliver)
 
 let register element event =
   match Melhole_shared.Delegation.of_event event with
@@ -178,7 +204,9 @@ let replay { root; kept } =
                   bubble target;
                   Dom_api.release_current_target native);
               match Dom_api.event_type native with
-              | "input" | "change" -> Option.iter (fun restore -> restore native) (Dom_api.handler target controlled)
+              | "input" | "change" ->
+                  Option.iter (fun deliver -> deliver native) (Js.Undefined.toOption (delivery deliveries "onchange"));
+                  Option.iter (fun restore -> restore native) (Dom_api.handler target controlled)
               | _ -> ())
         (Dom_api.target native))
     kept;

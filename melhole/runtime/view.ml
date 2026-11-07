@@ -1218,10 +1218,12 @@ let set_prop (hole : Hole.prop) value =
     (match hole.echo with
     | Alone -> ()
     | Default_value -> (
+        Events.track hole.element;
         match (Dom_api.property hole.element "type" : string) with
         | "number" when Dom_api.same (Dom_api.active_element Dom_api.document) (Js.Null.return hole.element) -> ()
         | _ -> Dom_api.set_property hole.element "defaultValue" value)
     | Default_checked_at_mount -> (
+        Events.track hole.element;
         match Dom_api.same hole.value unset with
         | true -> Dom_api.set_property hole.element "defaultChecked" value
         | false -> ())
@@ -1259,7 +1261,9 @@ let controlled_hole element name =
     restores :=
       (fun () ->
         let (Input value) = hole.value in
-        if not (Dom_api.same (Dom_api.property element name) value) then Dom_api.set_property element name value)
+        if not (Dom_api.same (Dom_api.property element name) value) then (
+          Dom_api.set_property element name value;
+          Events.track element))
       :: !restores;
     Dom_api.queue_microtask (fun () -> Dom_api.queue_microtask restore_controlled)
   in
