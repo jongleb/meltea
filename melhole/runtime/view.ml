@@ -1047,16 +1047,68 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                   in
                   claim 0)
             in
+            let trimmed () =
+              let rec front index =
+                if index < count && index < old_count && Dom_api.same (Array.unsafe_get items index) (Array.unsafe_get old.items index)
+                then front (index + 1)
+                else index
+              in
+              let from = front 0 in
+              let rec back kept =
+                if
+                  kept < count - from
+                  && kept < old_count - from
+                  && Dom_api.same (Array.unsafe_get items (count - 1 - kept)) (Array.unsafe_get old.items (old_count - 1 - kept))
+                then back (kept + 1)
+                else kept
+              in
+              let kept = back 0 in
+              match (count, from + kept = count, from + kept = old_count) with
+              | 0, _, _ -> `Rearranged
+              | _, true, false -> `Removed (from, old_count - kept)
+              | _, false, true -> `Inserted (from, count - kept)
+              | _, true, true | _, false, false -> `Rearranged
+            in
             let arrangement =
               match (count = old_count, outer_change) with
-              | false, _ -> `Rearranged
+              | false, Unchanged -> trimmed ()
+              | false, Changed -> `Rearranged
               | true, Changed -> in_place 0
               | true, Unchanged -> (
                   match in_place 0 with
                   | `In_place -> `In_place
                   | `Rearranged -> Option.fold ~none:`Rearranged ~some:(fun found -> `Shuffled found) (shuffled ()))
             in
+            let joined before middle after = Array.concat [ before; middle; after ] in
             match arrangement with
+            | `Removed (from, until) ->
+                for index = from to until - 1 do
+                  drop position (Array.unsafe_get old.frames index)
+                done;
+                let around whole size = joined (Array.sub whole 0 (from * size)) [||] (Array.sub whole (until * size) ((old_count - until) * size)) in
+                Some (shown items (around old.keys 1) (around old.projections pieces) (around old.frames 1) Unindexed)
+            | `Inserted (from, until) ->
+                let before =
+                  match from = old_count with
+                  | true -> position.before
+                  | false -> Js.Null.return (root_of (Array.unsafe_get old.frames from))
+                in
+                let added = until - from in
+                let mounted_at at =
+                  let item = Array.unsafe_get items (from + at) in
+                  mount { position with before } item
+                in
+                let frames = Array.make added (mounted_at 0) in
+                for at = 1 to added - 1 do
+                  Array.unsafe_set frames at (mounted_at at)
+                done;
+                let keys = Array.init added (fun at -> key (Array.unsafe_get items (from + at)) [@u]) in
+                let projections = (match added * pieces with 0 -> no_inputs | size -> Array.make size unset) in
+                for at = 0 to added - 1 do
+                  project (Array.unsafe_get items (from + at)) (from + at) projections (at * pieces) [@u]
+                done;
+                let around whole size middle = joined (Array.sub whole 0 (from * size)) middle (Array.sub whole (from * size) ((old_count - from) * size)) in
+                Some (shown items (around old.keys 1 keys) (around old.projections pieces projections) (around old.frames 1 frames) Unindexed)
             | `Shuffled (moved, sources) ->
                 let frames = old.frames and projections = old.projections and keys = old.keys in
                 let taken = Array.map (fun source -> Array.unsafe_get frames source) sources in
