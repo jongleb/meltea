@@ -1131,6 +1131,30 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
   match closure with
   | Volatile -> None
   | Reads names ->
+      let refined =
+        let executed =
+          match row.pexp_desc with
+          | Pexp_ident { txt = Lident name; _ } -> Option.value ~default:row (List.assoc_opt name definitions)
+          | _ -> row
+        in
+        let rec through visited pending found =
+          match pending with
+          | [] -> Some found
+          | name :: rest when List.mem name visited -> through visited rest found
+          | name :: rest -> (
+              match Option.map Free.of_expression (List.assoc_opt name definitions) with
+              | None -> through (name :: visited) rest found
+              | Some (Reads read) -> through (name :: visited) (read @ rest) (read @ found)
+              | Some Volatile -> None)
+        in
+        let indirect = match Free.of_expression executed with Reads read -> through [] read [] | Volatile -> None in
+        List.concat_map
+          (fun name ->
+            match (Option.map (List.mem name) indirect, Free.use name executed) with
+            | Some false, Fields (_ :: _ as fields) -> List.rev_map (fun field -> pexp_field ~loc (evar ~loc name) field) fields
+            | (Some _ | None), (Fields _ | Whole) -> [ evar ~loc name ])
+          names
+      in
       let inputs values =
         match stable @ values with
         | [] -> [%expr Melhole.View.no_inputs]
@@ -1183,14 +1207,14 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
       let pieces =
         eint ~loc
           (List.length stable
-          + Option.fold ~none:(List.length names) ~some:(fun (_, leaves, _, _) -> List.length leaves) split)
+          + Option.fold ~none:(List.length refined) ~some:(fun (_, leaves, _, _) -> List.length leaves) split)
       in
       let project =
         pexp_record ~loc
           [
             ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I4"); loc },
               Option.fold
-                ~none:[%expr fun _ _ __melhole_out __melhole_at -> [%e written (List.map (fun name -> evar ~loc name) names)]]
+                ~none:[%expr fun _ _ __melhole_out __melhole_at -> [%e written refined]]
                 ~some:(fun (bind, leaves, _, _) ->
                   [%expr
                     fun __melhole_item __melhole_index __melhole_out __melhole_at ->
@@ -1200,9 +1224,9 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
           ]
           None
       in
-      let outer = inputs (List.map (fun name -> evar ~loc name) names) in
+      let outer = inputs refined in
       let selectors =
-        let given = stable @ List.map (fun name -> evar ~loc name) names in
+        let given = stable @ refined in
         let read leaf =
           match Free.closure ~definitions ~locals:frontend.locals leaf with
           | Volatile -> (1 lsl List.length given) - 1
@@ -1211,7 +1235,10 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                 (List.mapi
                    (fun at value ->
                      match value.pexp_desc with
-                     | Pexp_ident { txt = Lident name; _ } when List.mem name read -> 1 lsl at
+                     | Pexp_ident { txt = Lident name; _ }
+                     | Pexp_field ({ pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, _)
+                       when List.mem name read ->
+                         1 lsl at
                      | _ -> 0)
                    given)
         in

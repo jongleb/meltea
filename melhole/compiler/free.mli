@@ -14,6 +14,12 @@ val closure :
   definitions:(string * Ppxlib.expression) list -> locals:string list -> Ppxlib.expression -> t
 val bound : Ppxlib.pattern -> string list
 
+(** How an expression uses a variable: only through these fields ([v.f]), or as a whole value, or
+    under a binding of the same name. *)
+type use = Fields of Ppxlib.longident Ppxlib.loc list | Whole
+
+val use : string -> Ppxlib.expression -> use
+
 val leaves :
   outer:string list ->
   view:(Ppxlib.expression -> bool) ->

@@ -22,6 +22,27 @@ let rec bound pattern =
   | Ppat_variant (_, None) | Ppat_type _ | Ppat_unpack _ | Ppat_extension _ ->
       []
 
+type use = Fields of longident loc list | Whole
+
+let use variable expression =
+  (object
+     inherit [use] Ast_traverse.fold as super
+
+     method! expression expression found =
+       match (found, expression.pexp_desc) with
+       | Whole, _ -> Whole
+       | Fields fields, Pexp_field ({ pexp_desc = Pexp_ident { txt = Lident name; _ }; _ }, field) when String.equal name variable ->
+           Fields (match List.exists (fun known -> known.txt = field.txt) fields with true -> fields | false -> field :: fields)
+       | Fields _, Pexp_ident { txt = Lident name; _ } when String.equal name variable -> Whole
+       | Fields _, _ -> super#expression expression found
+
+     method! pattern pattern found =
+       match pattern.ppat_desc with
+       | (Ppat_var { txt = name; _ } | Ppat_alias (_, { txt = name; _ })) when String.equal name variable -> Whole
+       | _ -> super#pattern pattern found
+  end)
+    #expression expression (Fields [])
+
 (** When the reads of an expression happen: while it is evaluated, or later, when a function that holds
     it is called. *)
 type timing = Now | Later
