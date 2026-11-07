@@ -1,6 +1,31 @@
 open Ppxlib
 open Ast_builder.Default
 
+let as_javascript text delimiter =
+  match delimiter with
+  | Some ("js" | "j") -> text
+  | Some _ | None ->
+      String.concat ""
+        (List.map
+           (fun character ->
+             match Char.code character with
+             | code when code < 0x80 -> String.make 1 character
+             | code -> String.init 2 (fun index -> Char.chr (match index with 0 -> 0xC0 lor (code lsr 6) | _ -> 0x80 lor (code land 0x3F))))
+           (List.of_seq (String.to_seq text)))
+
+let text_literal ~loc text =
+  Option.fold ~none:(estring ~loc text)
+    ~some:(fun _ ->
+      let rec closing index =
+        match index + 4 <= String.length text with
+        | false -> `Absent
+        | true -> ( match String.sub text index 4 with "|js}" -> `Present | _ -> closing (index + 1))
+      in
+      match closing 0 with
+      | `Present -> Location.raise_errorf ~loc "melhole: static text must not contain |js}"
+      | `Absent -> pexp_constant ~loc (Pconst_string (text, loc, Some "js")))
+    (Seq.find (fun character -> Char.code character >= 0x80) (String.to_seq text))
+
 type text = String_text | Int_text | Float_text
 type special = Text of text * expression | Nothing
 
@@ -79,7 +104,7 @@ let prop frontend ~loc ~label kind requirement value =
   in
   let literal =
     match value.pexp_desc with
-    | Pexp_constant (Pconst_string (text, _, _)) -> `String text
+    | Pexp_constant (Pconst_string (text, _, delimiter)) -> `String (as_javascript text delimiter)
     | Pexp_constant (Pconst_integer (digits, None)) -> `Number digits
     | Pexp_constant (Pconst_float (digits, None)) -> `Number digits
     | Pexp_construct ({ txt = Lident "true"; _ }, None) -> `True
@@ -273,7 +298,7 @@ let rec analyse frontend ~loc ~forks tag arguments =
         List.map
           (fun (_, made) ->
             match made with
-            | Static (attribute, Valued text) -> Dynamic (Attr attribute, [%expr Some [%e estring ~loc text]])
+            | Static (attribute, Valued text) -> Dynamic (Attr attribute, [%expr Some [%e text_literal ~loc text]])
             | Static (attribute, Bare) -> Dynamic (Attr attribute, [%expr Some ""])
             | Dynamic _ | Absent -> made)
           (List.stable_sort (fun (first, _) (second, _) -> compare first second) (List.rev !given))
@@ -294,8 +319,8 @@ and child frontend ~forks item =
   | None -> (
       match frontend.classify item with
       | Some Nothing -> None
-      | Some (Text (String_text, { pexp_desc = Pexp_constant (Pconst_string (text, _, _)); _ })) ->
-          Some (Markup.Text text)
+      | Some (Text (String_text, { pexp_desc = Pexp_constant (Pconst_string (text, _, delimiter)); _ })) ->
+          Some (Markup.Text (as_javascript text delimiter))
       | Some (Text (Int_text, { pexp_desc = Pexp_constant (Pconst_integer (digits, None)); _ })) ->
           Some (Markup.Text (string_of_int (int_of_string digits)))
       | Some (Text (Float_text, { pexp_desc = Pexp_constant (Pconst_float (digits, None)); _ })) ->
@@ -338,7 +363,9 @@ let served frontend ~loc (element : expression Markup.element) key =
     let preformatted = match tree.tag with "pre" | "listing" | "textarea" -> `Preformatted | _ -> `Plain in
     let written name value =
       match value with
-      | [%expr Some [%e? { pexp_desc = Pexp_constant (Pconst_string (text, _, _)); _ }]] ->
+      | [%expr Some [%e? { pexp_desc = Pexp_constant (Pconst_string (text, _, Some ("js" | "j"))); _ }]]
+      | [%expr Some [%e? { pexp_desc = Pexp_constant (Pconst_string (text, _, None)); _ }]]
+        when Option.is_none (Seq.find (fun character -> Char.code character >= 0x80) (String.to_seq text)) ->
           `Tag (" " ^ name ^ "=\"" ^ Melhole_server.escape text ^ "\"")
       | _ -> `Run [%expr Melhole_server.attribute [%e writer] [%e estring ~loc name] [%e value]]
     in
@@ -396,7 +423,7 @@ let served frontend ~loc (element : expression Markup.element) key =
               (List.fold_left
                  (fun text (node : expression Markup.node) ->
                    match node with
-                   | Text static -> [%expr [%e text] ^ [%e estring ~loc static]]
+                   | Text static -> [%expr [%e text] ^ [%e text_literal ~loc static]]
                    | Slot (Text_slot, value) -> [%expr [%e text] ^ [%e value]]
                    | Slot (Child_slot, _) | Element _ -> text)
                  [%expr ""] tree.children) )
@@ -464,7 +491,7 @@ let served frontend ~loc (element : expression Markup.element) key =
             | Text text, `Other -> ([ `Text (Melhole_server.escape text) ], `Text)
             | Text text, `Text -> ([ `Text ("<!-- -->" ^ Melhole_server.escape text) ], `Text)
             | Text text, `Unknown ->
-                ([ `Run [%expr Melhole_server.static_text [%e writer] [%e estring ~loc (Melhole_server.escape text)]] ], `Text)
+                ([ `Run [%expr Melhole_server.static_text [%e writer] [%e text_literal ~loc (Melhole_server.escape text)]] ], `Text)
             | Element child, _ -> (ops child, `Other)
             | Slot (Text_slot, value), _ -> ([ `Run [%expr Melhole_server.dynamic_text [%e writer] [%e value]] ], `Unknown)
             | Slot (Child_slot, value), _ ->
@@ -530,8 +557,8 @@ let served frontend ~loc (element : expression Markup.element) key =
       (fun step rest ->
         let run =
           match step with
-          | `Tag chunk -> [%expr Melhole_server.markup [%e writer] [%e estring ~loc chunk]]
-          | `Text chunk -> [%expr Melhole_server.markup_text [%e writer] [%e estring ~loc chunk]]
+          | `Tag chunk -> [%expr Melhole_server.markup [%e writer] [%e text_literal ~loc chunk]]
+          | `Text chunk -> [%expr Melhole_server.markup_text [%e writer] [%e text_literal ~loc chunk]]
           | `Run run -> run
           | `Choose (_, value) -> [%expr Melhole_server.choose [%e writer] [%e value]]
         in
@@ -658,8 +685,8 @@ let lowercase frontend ~loc ~attributes tag arguments =
     | "foreignObject" | "g" | "image" | "line" | "linearGradient" | "marker" | "mask" | "path"
     | "pattern" | "polygon" | "polyline" | "radialGradient" | "rect" | "stop" | "symbol"
     | "text" | "textPath" | "tspan" | "use" ->
-        [%expr Melhole.Template.svg [%e estring ~loc html]]
-    | _ -> [%expr Melhole.Template.html [%e estring ~loc html]]
+        [%expr Melhole.Template.svg [%e text_literal ~loc html]]
+    | _ -> [%expr Melhole.Template.html [%e text_literal ~loc html]]
   in
   let guards =
     List.map
@@ -963,7 +990,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
                        [%e body]]
                  | Leave indices -> [%expr Melhole.View.adopt_finish [%e evar ~loc (cursor indices)]; [%e body]]
                  | Static (indices, text) ->
-                     [%expr Melhole.View.adopt_static [%e evar ~loc (cursor indices)] [%e estring ~loc text]; [%e body]]
+                     [%expr Melhole.View.adopt_static [%e evar ~loc (cursor indices)] [%e text_literal ~loc text]; [%e body]]
                  | Anchor indices -> [%expr Melhole.View.adopt_anchor [%e evar ~loc (cursor indices)]; [%e body]]
                  | Slot_at (indices, Text_slot, value) ->
                      let named = hole_name (hole_of value) in
