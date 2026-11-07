@@ -36,8 +36,9 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     include: ["_build/default/test/**/output/test/**/*_test.mjs"],
-    // test/typed/dual is the dual suite built with -typed, checked byte for byte against test/dual by dune.
-    exclude: ["**/node_modules/**", "_build/default/test/typed/dual/**"],
+    // test/typed/dual and test/typed/staged are the dual suite under staged_pps with and without -typed, checked
+    // byte for byte against each other by dune; test/typed/probed runs it.
+    exclude: ["**/node_modules/**", "_build/default/test/typed/dual/**", "_build/default/test/typed/staged/**"],
     setupFiles: ["./test/setup.js"],
   },
 });

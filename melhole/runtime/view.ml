@@ -355,20 +355,36 @@ let remember memory inputs compute =
       memory.kept <- Some value;
       value
 
+type order = In_document_order | Out_of_order
+
+let patch_order = ref In_document_order
+
+let out_of_order run =
+  let saved = !patch_order in
+  patch_order := Out_of_order;
+  match run () with
+  | result ->
+      patch_order := saved;
+      result
+  | exception error ->
+      patch_order := saved;
+      raise error
+
 let backwards count (position : Template.position) make front =
   match count with
   | 0 -> [||]
   | _ ->
-      let last = make (count - 1) position [@u] in
-      let result = Array.make count last in
-      let rec fill i before =
-        if i >= 0 then (
-          let made = make i { position with before } [@u] in
-          Array.unsafe_set result i made;
-          fill (i - 1) (front made before [@u]))
-      in
-      fill (count - 2) (front last position.before [@u]);
-      result
+      out_of_order (fun () ->
+          let last = make (count - 1) position [@u] in
+          let result = Array.make count last in
+          let rec fill i before =
+            if i >= 0 then (
+              let made = make i { position with before } [@u] in
+              Array.unsafe_set result i made;
+              fill (i - 1) (front made before [@u]))
+          in
+          fill (count - 2) (front last position.before [@u]);
+          result)
 
 let front_of = fun [@u] live after -> front live after
 
@@ -647,7 +663,9 @@ let each site numbering source listed render project pieces outer selectors =
             match
               match outer_change with
               | Unchanged -> None
-              | Changed -> reselected old.items old.selectors old.indexes old.outer items selectors outer redraw
+              | Changed ->
+                  out_of_order (fun () ->
+                      reselected old.items old.selectors old.indexes old.outer items selectors outer redraw)
             with
             | Some indexes ->
                 Some
@@ -742,7 +760,7 @@ let each site numbering source listed render project pieces outer selectors =
             match in_place with
             | Some made ->
                 let lives = old.lives and projections = old.projections in
-                for index = count - 1 downto 0 do
+                for index = 0 to count - 1 do
                   let item = Array.unsafe_get items index and at = index * pieces in
                   let fresh = match Array.length made with 0 -> None | _ -> Array.unsafe_get made index in
                   match (fresh, outer_change) with
@@ -830,7 +848,7 @@ let each site numbering source listed render project pieces outer selectors =
                              (described index)));
                     refresh (index - 1))
                 in
-                refresh (count - 1);
+                out_of_order (fun () -> refresh (count - 1));
                 Some (Each_state { site; source = Input source; items; keys; outer; projections; lives; selectors; indexes = Unindexed })
             | _, (`Same | `Moved) ->
                 let plan = Reconcile.plan ~old:old.keys ~next:keys in
@@ -1053,7 +1071,9 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
             match
               match outer_change with
               | Unchanged -> None
-              | Changed -> reselected old.items old.selectors old.indexes old.outer items selectors outer redraw
+              | Changed ->
+                  out_of_order (fun () ->
+                      reselected old.items old.selectors old.indexes old.outer items selectors outer redraw)
             with
             | Some indexes -> Some (shown items old.keys old.projections old.frames indexes)
             | None ->
@@ -1173,76 +1193,77 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                 let around whole size middle = joined (Array.sub whole 0 (from * size)) middle (Array.sub whole (from * size) ((old_count - from) * size)) in
                 Some (shown items (around old.keys 1 keys) (around old.projections pieces projections) (around old.frames 1 frames) Unindexed)
             | `Shuffled (moved, claimed) ->
-                let frames = old.frames and projections = old.projections and keys = old.keys in
-                let sources = Array.map (fun source -> fst (Array.unsafe_get moved source)) claimed in
-                let taken = Array.map (fun source -> Array.unsafe_get frames source) sources in
-                let was = Array.map (fun source -> Array.unsafe_get old.items source) sources in
-                let size = Array.length moved in
-                let settled =
-                  let lengths = Array.make size 0 and previous = Array.make size (-1) in
-                  for at = 0 to size - 1 do
-                    match fst (Array.unsafe_get moved at) - at = Array.unsafe_get sources at - Array.unsafe_get claimed at with
-                    | false -> ()
-                    | true ->
-                        Array.unsafe_set lengths at 1;
-                        for before = 0 to at - 1 do
-                          if
-                            Array.unsafe_get lengths before > 0
-                            && Array.unsafe_get sources before < Array.unsafe_get sources at
-                            && Array.unsafe_get lengths before + 1 > Array.unsafe_get lengths at
-                          then (
-                            Array.unsafe_set lengths at (Array.unsafe_get lengths before + 1);
-                            Array.unsafe_set previous at before)
-                        done
-                  done;
-                  let best = ref (-1) in
-                  Array.iteri
-                    (fun at length -> if length > 0 && (!best < 0 || length > Array.unsafe_get lengths !best) then best := at)
-                    lengths;
-                  let settled = Array.make size `Moves in
-                  let rec keep at =
-                    match at < 0 with
-                    | true -> ()
-                    | false ->
-                        Array.unsafe_set settled at `Stays;
-                        keep (Array.unsafe_get previous at)
-                  in
-                  keep !best;
-                  settled
-                in
-                let ahead = ref 0 in
-                for index = 0 to count - 1 do
-                  match (!ahead < Array.length moved && fst (Array.unsafe_get moved !ahead) = index, Dom_api.same (Array.unsafe_get items index) (Array.unsafe_get old.items index)) with
-                  | true, _ -> incr ahead
-                  | false, true -> ()
-                  | false, false ->
-                      let item = Array.unsafe_get items index in
-                      project item index projections (index * pieces) [@u];
-                      Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) item)
-                done;
-                Array.iteri
-                  (fun at (index, named) ->
-                    let item = Array.unsafe_get items index in
-                    Array.unsafe_set keys index named;
-                    project item index projections (index * pieces) [@u];
-                    Array.unsafe_set frames index
-                      (match Dom_api.same item (Array.unsafe_get was at) with
-                      | true -> Array.unsafe_get taken at
-                      | false -> refreshed (Array.unsafe_get taken at) item))
-                  moved;
-                for at = size - 1 downto 0 do
-                  match Array.unsafe_get settled at with
-                  | `Stays -> ()
-                  | `Moves ->
-                      let index = fst (Array.unsafe_get moved at) in
-                      let before =
-                        match index + 1 = count with
-                        | true -> position.before
-                        | false -> Js.Null.return (root_of (Array.unsafe_get frames (index + 1)))
+                out_of_order (fun () ->
+                    let frames = old.frames and projections = old.projections and keys = old.keys in
+                    let sources = Array.map (fun source -> fst (Array.unsafe_get moved source)) claimed in
+                    let taken = Array.map (fun source -> Array.unsafe_get frames source) sources in
+                    let was = Array.map (fun source -> Array.unsafe_get old.items source) sources in
+                    let size = Array.length moved in
+                    let settled =
+                      let lengths = Array.make size 0 and previous = Array.make size (-1) in
+                      for at = 0 to size - 1 do
+                        match fst (Array.unsafe_get moved at) - at = Array.unsafe_get sources at - Array.unsafe_get claimed at with
+                        | false -> ()
+                        | true ->
+                            Array.unsafe_set lengths at 1;
+                            for before = 0 to at - 1 do
+                              if
+                                Array.unsafe_get lengths before > 0
+                                && Array.unsafe_get sources before < Array.unsafe_get sources at
+                                && Array.unsafe_get lengths before + 1 > Array.unsafe_get lengths at
+                              then (
+                                Array.unsafe_set lengths at (Array.unsafe_get lengths before + 1);
+                                Array.unsafe_set previous at before)
+                            done
+                      done;
+                      let best = ref (-1) in
+                      Array.iteri
+                        (fun at length -> if length > 0 && (!best < 0 || length > Array.unsafe_get lengths !best) then best := at)
+                        lengths;
+                      let settled = Array.make size `Moves in
+                      let rec keep at =
+                        match at < 0 with
+                        | true -> ()
+                        | false ->
+                            Array.unsafe_set settled at `Stays;
+                            keep (Array.unsafe_get previous at)
                       in
-                      move position.parent (root_of (Array.unsafe_get frames index)) before
-                done;
-                Some (shown items keys projections frames Unindexed)
+                      keep !best;
+                      settled
+                    in
+                    let ahead = ref 0 in
+                    for index = 0 to count - 1 do
+                      match (!ahead < Array.length moved && fst (Array.unsafe_get moved !ahead) = index, Dom_api.same (Array.unsafe_get items index) (Array.unsafe_get old.items index)) with
+                      | true, _ -> incr ahead
+                      | false, true -> ()
+                      | false, false ->
+                          let item = Array.unsafe_get items index in
+                          project item index projections (index * pieces) [@u];
+                          Array.unsafe_set frames index (refreshed (Array.unsafe_get frames index) item)
+                    done;
+                    Array.iteri
+                      (fun at (index, named) ->
+                        let item = Array.unsafe_get items index in
+                        Array.unsafe_set keys index named;
+                        project item index projections (index * pieces) [@u];
+                        Array.unsafe_set frames index
+                          (match Dom_api.same item (Array.unsafe_get was at) with
+                          | true -> Array.unsafe_get taken at
+                          | false -> refreshed (Array.unsafe_get taken at) item))
+                      moved;
+                    for at = size - 1 downto 0 do
+                      match Array.unsafe_get settled at with
+                      | `Stays -> ()
+                      | `Moves ->
+                          let index = fst (Array.unsafe_get moved at) in
+                          let before =
+                            match index + 1 = count with
+                            | true -> position.before
+                            | false -> Js.Null.return (root_of (Array.unsafe_get frames (index + 1)))
+                          in
+                          move position.parent (root_of (Array.unsafe_get frames index)) before
+                    done;
+                    Some (shown items keys projections frames Unindexed))
             | `In_place ->
                 let frames = old.frames and projections = old.projections and indexes = ref old.indexes in
                 for index = 0 to count - 1 do
@@ -1351,15 +1372,16 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                   match count with
                   | 0 -> [||]
                   | _ ->
-                      let last = settled (count - 1) position.before in
-                      let frames = Array.make count last in
-                      let before = ref (Js.Null.return (root_of last)) in
-                      for j = count - 2 downto 0 do
-                        let frame = settled j !before in
-                        Array.unsafe_set frames j frame;
-                        before := Js.Null.return (root_of frame)
-                      done;
-                      frames
+                      out_of_order (fun () ->
+                          let last = settled (count - 1) position.before in
+                          let frames = Array.make count last in
+                          let before = ref (Js.Null.return (root_of last)) in
+                          for j = count - 2 downto 0 do
+                            let frame = settled j !before in
+                            Array.unsafe_set frames j frame;
+                            before := Js.Null.return (root_of frame)
+                          done;
+                          frames)
                 in
                 Some (shown items keys projections frames Unindexed)))
         | _ -> None);

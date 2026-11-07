@@ -182,6 +182,13 @@ val medium : medium ref
 type positions = { fork : (int -> int -> unit[@u]); join : (unit -> unit[@u]) }
 
 val positions : positions ref
+
+(** In what order the patch under way reaches the children it patches: [Out_of_order] while a list
+    patches its items from the last one or picks the rows a selection changed. *)
+type order = In_document_order | Out_of_order
+
+val patch_order : order ref
+
 val backwards :
   int ->
   Template.position ->
