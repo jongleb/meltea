@@ -1,0 +1,4 @@
+(library
+ (name melhole_shared)
+ (public_name melhole.shared)
+ (modes native melange))

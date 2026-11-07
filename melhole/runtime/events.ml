@@ -15,7 +15,6 @@ let paced event handle native =
   | _ -> handle native
 
 let keys = ref []
-let deliveries = ref []
 
 let key_of event =
   match List.find_map (fun (known, key) -> if String.equal known event then Some key else None) !keys with
@@ -27,60 +26,63 @@ let key_of event =
 
 let controlled = "$$melhole:controlled"
 
-let delegation event =
-  match event with
-  | "beforeinput" | "change" | "click" | "dblclick" | "contextmenu" | "focusin" | "focusout" | "input"
-  | "keydown" | "keyup" | "mousedown" | "mousemove" | "mouseout" | "mouseover" | "mouseup" | "pointerdown"
-  | "pointermove" | "pointerout" | "pointerover" | "pointerup" | "touchend" | "touchmove" | "touchstart" ->
-      `Delegated
-  | _ -> `Direct
+(** A JavaScript [Map] from a delegated event to the [document] listener that delivers it. *)
+type deliveries
+
+external deliveries_made : unit -> deliveries = "Map" [@@mel.new]
+external delivery : deliveries -> string -> (Dom.event -> unit) Js.undefined = "get" [@@mel.send]
+external deliver_with : deliveries -> string -> (Dom.event -> unit) -> unit = "set" [@@mel.send]
+
+let deliveries = deliveries_made ()
+
+let delegate event =
+  match Js.Undefined.toOption (delivery deliveries event) with
+  | Some _ -> ()
+  | None ->
+      let key = key_of event in
+      let pointing =
+        match event with "click" | "dblclick" | "mousedown" | "mousemove" | "mouseup" -> `Mouse | _ -> `Other
+      in
+      let deliver native =
+        let rec bubble node =
+          Option.iter
+            (fun handle ->
+              match (pointing, Dom_api.node_name node) with
+              | `Mouse, ("BUTTON" | "INPUT" | "SELECT" | "TEXTAREA")
+                when (Dom_api.property (Dom_api.unsafe_element node) "disabled" : bool) ->
+                  ()
+              | (`Mouse | `Other), _ ->
+                  Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
+                  paced event handle native)
+            (Dom_api.handler node key);
+          match Dom_api.cancel_bubble native with
+          | true -> ()
+          | false -> Option.iter bubble (Dom_api.parent_node node)
+        in
+        Option.iter bubble (Dom_api.target native);
+        Dom_api.release_current_target native;
+        match event with
+        | "input" | "change" ->
+            Option.iter
+              (fun target -> Option.iter (fun restore -> restore native) (Dom_api.handler target controlled))
+              (Dom_api.target native)
+        | _ -> ()
+      in
+      deliver_with deliveries event deliver;
+      Dom_api.add_document_listener Dom_api.document event deliver
 
 let register element event =
-  let key = key_of event in
-  match delegation event with
-    | `Delegated ->
-        (match List.assoc_opt event !deliveries with
-        | Some _ -> ()
-        | None ->
-            let pointing =
-              match event with
-              | "click" | "dblclick" | "mousedown" | "mousemove" | "mouseup" -> `Mouse
-              | _ -> `Other
-            in
-            let deliver native =
-              let rec bubble node =
-                Option.iter
-                  (fun handle ->
-                    match (pointing, Dom_api.node_name node) with
-                    | `Mouse, ("BUTTON" | "INPUT" | "SELECT" | "TEXTAREA")
-                      when (Dom_api.property (Dom_api.unsafe_element node) "disabled" : bool) ->
-                        ()
-                    | (`Mouse | `Other), _ ->
-                        Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
-                        paced event handle native)
-                  (Dom_api.handler node key);
-                match Dom_api.cancel_bubble native with
-                | true -> ()
-                | false -> Option.iter bubble (Dom_api.parent_node node)
-              in
-              Option.iter bubble (Dom_api.target native);
-              Dom_api.release_current_target native;
-              match event with
-              | "input" | "change" ->
-                  Option.iter
-                    (fun target -> Option.iter (fun restore -> restore native) (Dom_api.handler target controlled))
-                    (Dom_api.target native)
-              | _ -> ()
-            in
-            deliveries := (event, deliver) :: !deliveries;
-            Dom_api.add_document_listener Dom_api.document event deliver);
-        Delegated
-    | `Direct ->
-        let listener native =
-          Option.iter (fun handle -> paced event handle native) (Dom_api.handler (Dom_api.to_node element) key)
-        in
-        Dom_api.add_listener element event listener;
-        Direct (fun () -> Dom_api.remove_listener element event listener)
+  match Melhole_shared.Delegation.of_event event with
+  | Delegated ->
+      delegate event;
+      Delegated
+  | Direct ->
+      let key = key_of event in
+      let listener native =
+        Option.iter (fun handle -> paced event handle native) (Dom_api.handler (Dom_api.to_node element) key)
+      in
+      Dom_api.add_listener element event listener;
+      Direct (fun () -> Dom_api.remove_listener element event listener)
 
 let set element key handler = Dom_api.set_handler element key handler
 
@@ -100,9 +102,9 @@ let listen element event =
   | Direct remove -> Dom_api.set_property element (removal_of event) remove
 
 let unlisten element event =
-  match delegation event with
-  | `Delegated -> ()
-  | `Direct ->
+  match Melhole_shared.Delegation.of_event event with
+  | Delegated -> ()
+  | Direct ->
       Option.iter
         (fun remove -> remove ())
         (Js.Undefined.toOption (Dom_api.property element (removal_of event) : (unit -> unit) Js.undefined))
@@ -155,7 +157,7 @@ let replay { root; kept } =
     (fun (native, early_value, early_checked) ->
       Option.iter
         (fun target ->
-          match (contains root target, List.assoc_opt (Dom_api.event_type native) !deliveries) with
+          match (contains root target, Js.Undefined.toOption (delivery deliveries (Dom_api.event_type native))) with
           | false, _ -> ()
           | true, found -> (
               restore target early_value early_checked;

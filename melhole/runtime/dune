@@ -2,7 +2,7 @@
  (name melhole)
  (public_name melhole)
  (modes melange)
- (libraries melange.dom)
+ (libraries melange.dom melhole.shared)
  (modules_without_implementation dom_api)
  (preprocess
   (pps melange.ppx)))

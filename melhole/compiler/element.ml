@@ -609,10 +609,15 @@ let lowercase frontend ~loc ~attributes tag arguments =
         (fun (kept, same, effects, keys) (named, creator) ->
           match creator with
           | [%expr Melhole.Events.listen [%e? element] [%e? event]] ->
-              ( kept,
-                same,
-                [%expr Melhole.Events.listen [%e element] [%e event]] :: effects,
-                (named, Hoist.hoist ~loc "event" [%expr Melhole.View.event_key [%e event]]) :: keys )
+              let registered =
+                match event.pexp_desc with
+                | Pexp_constant (Pconst_string (name, _, _)) -> (
+                    match Melhole_shared.Delegation.of_event name with
+                    | Delegated -> ignore (Hoist.hoist ~loc "delegated" [%expr Melhole.Events.delegate [%e event]]); effects
+                    | Direct -> [%expr Melhole.Events.listen [%e element] [%e event]] :: effects)
+                | _ -> [%expr Melhole.Events.listen [%e element] [%e event]] :: effects
+              in
+              (kept, same, registered, (named, Hoist.hoist ~loc "event" [%expr Melhole.View.event_key [%e event]]) :: keys)
           | [%expr Melhole.Template.element [%e? _]] -> (
               let printed = Pprintast.string_of_expression creator in
               match
@@ -882,8 +887,10 @@ let lowercase frontend ~loc ~attributes tag arguments =
           (List.mapi
              (fun index (hole : expression Markup.hole) ->
                match hole with
-               | On_element (_, Handler event, _) ->
-                   [ [%expr Melhole.Events.unlisten [%e read (original (hole_name index))] [%e estring ~loc event]] ]
+               | On_element (_, Handler event, _) -> (
+                   match Melhole_shared.Delegation.of_event event with
+                   | Delegated -> []
+                   | Direct -> [ [%expr Melhole.Events.unlisten [%e read (original (hole_name index))] [%e estring ~loc event]] ])
                | On_element (_, (Attr _ | Prop _ | Control _ | Ref | Style | Sole_text), _) | At_position _ -> [])
              holes)
       in

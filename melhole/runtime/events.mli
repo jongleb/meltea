@@ -19,6 +19,10 @@ val key_of : string -> string
     bubbles, on the element otherwise. *)
 val register : Dom.element -> string -> registration
 
+(** Listens at the document for a delegated event, once per event type; compiled templates call it
+    once, not per element. *)
+val delegate : string -> unit
+
 val listen : Dom.element -> string -> unit
 
 val unlisten : Dom.element -> string -> unit
