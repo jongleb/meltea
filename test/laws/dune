@@ -1,7 +1,10 @@
 (copy_files
  (files ../../melhole/runtime/reconcile.{ml,mli}))
 
+(copy_files
+ (files ../../melhole/prerender/shell.{ml,mli}))
+
 (test
  (name laws)
  (package meltea-ppx)
- (libraries qcheck-core qcheck-core.runner ppxlib melhole.compiler meltea-ppx))
+ (libraries qcheck-core qcheck-core.runner ppxlib melhole.compiler melhole.server meltea-ppx))

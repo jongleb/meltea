@@ -842,23 +842,39 @@ let lowercase frontend ~loc ~attributes tag arguments =
             (List.assoc_opt index value_slots)
         in
         let set =
-          match hole with
-          | On_element (_, Attr name, value) ->
+          match (hole, !output) with
+          | On_element (_, Attr name, value), (Client_only | Server) ->
               written
                 (fun last value -> [%expr Melhole.View.put_attr [%e last] [%e hole_value] [%e estring ~loc name] [%e value]])
                 (fun value -> [%expr Melhole.View.write_attr [%e hole_value] [%e estring ~loc name] [%e value]])
                 value
-          | At_position (_, _, Text_slot, value) ->
+          | On_element (_, Attr name, value), Hydratable ->
+              written
+                (fun last value ->
+                  [%expr Melhole.View.served_put_attr [%e last] [%e hole_value] [%e estring ~loc name] [%e value]])
+                (fun value -> [%expr Melhole.View.served_write_attr [%e hole_value] [%e estring ~loc name] [%e value]])
+                value
+          | At_position (_, _, Text_slot, value), (Client_only | Server) ->
               written
                 (fun last value -> [%expr Melhole.View.put_text [%e last] [%e hole_value] [%e value]])
                 (fun value -> [%expr Melhole.Dom_api.set_data [%e hole_value] [%e value]])
                 value
-          | On_element (_, Sole_text, value) ->
+          | At_position (_, _, Text_slot, value), Hydratable ->
+              written
+                (fun last value -> [%expr Melhole.View.served_put_text [%e last] [%e hole_value] [%e value]])
+                (fun value -> [%expr Melhole.View.served_write_text [%e hole_value] [%e value]])
+                value
+          | On_element (_, Sole_text, value), (Client_only | Server) ->
               written
                 (fun last value -> [%expr Melhole.View.put_sole_text [%e last] [%e hole_value] [%e value]])
                 (fun value -> [%expr Melhole.View.write_sole_text [%e hole_value] [%e value]])
                 value
-          | On_element (_, Handler _, value) -> (
+          | On_element (_, Sole_text, value), Hydratable ->
+              written
+                (fun last value -> [%expr Melhole.View.served_put_sole_text [%e last] [%e hole_value] [%e value]])
+                (fun value -> [%expr Melhole.View.served_write_sole_text [%e hole_value] [%e value]])
+                value
+          | On_element (_, Handler _, value), _ -> (
               let key = evar ~loc (key_name index) in
               match (frontend.handlers, guard) with
               | Linked dispatch, Free.Reads names ->
@@ -885,15 +901,18 @@ let lowercase frontend ~loc ~attributes tag arguments =
                   let site = Hoist.hoist ~loc "link" [%expr Melhole.View.link [%e body]] in
                   [%expr Melhole.View.put_linked [%e hole_value] [%e key] [%e site] [%e evar ~loc dispatch] [%e carried]]
               | Linked _, Free.Volatile | Closures, _ -> [%expr Melhole.View.put_handler [%e hole_value] [%e key] [%e value]])
-          | On_element (_, (Prop _ | Control _), value) -> [%expr Melhole.View.set_prop [%e hole_value] [%e value]]
-          | On_element (_, Ref, { pexp_desc = Pexp_tuple [ identity; callback ]; _ }) ->
+          | On_element (_, (Prop _ | Control _), value), (Client_only | Server) ->
+              [%expr Melhole.View.set_prop [%e hole_value] [%e value]]
+          | On_element (_, (Prop _ | Control _), value), Hydratable ->
+              [%expr Melhole.View.served_set_prop [%e hole_value] [%e value]]
+          | On_element (_, Ref, { pexp_desc = Pexp_tuple [ identity; callback ]; _ }), _ ->
               [%expr Melhole.View.set_reference [%e hole_value] [%e identity] [%e callback]]
-          | On_element (_, Ref, value) ->
+          | On_element (_, Ref, value), _ ->
               [%expr
                 let __melhole_reference = [%e value] in
                 Melhole.View.set_reference [%e hole_value] __melhole_reference __melhole_reference]
-          | On_element (_, Style, value) -> [%expr Melhole.View.set_style [%e hole_value] [%e value]]
-          | At_position (_, _, Child_slot, value) -> [%expr Melhole.View.set_content [%e hole_value] [%e value]]
+          | On_element (_, Style, value), _ -> [%expr Melhole.View.set_style [%e hole_value] [%e value]]
+          | At_position (_, _, Child_slot, value), _ -> [%expr Melhole.View.set_content [%e hole_value] [%e value]]
         in
         match guard with
         | Free.Volatile -> set
@@ -1104,7 +1123,22 @@ let lowercase frontend ~loc ~attributes tag arguments =
                  | false -> body)
                creators adopting
            in
-           binary [%expr fun __melhole_node __melhole_collected -> ([%e collected] [@ocaml.warning "-26-27"])])
+           match
+             List.exists
+               (fun (step : expression Markup.adoption) ->
+                 match step with
+                 | Slot_at _ | Child_before_anchor _ -> true
+                 | Enter _ | Leave _ | Static _ | Anchor _ -> false)
+               (Markup.adoption element)
+           with
+           | true ->
+               binary
+                 [%expr
+                   fun __melhole_node __melhole_collect ->
+                     (let __melhole_collected = __melhole_collect () in
+                      [%e collected])
+                     [@ocaml.warning "-26-27"]]
+           | false -> binary [%expr fun __melhole_node _ -> ([%e adopting] [@ocaml.warning "-26-27"])])
       in
       let template =
         Hoist.hoist ~loc "template"

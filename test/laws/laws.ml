@@ -598,5 +598,55 @@ let fanout_laws =
       ~count:500 fanout_program (fun program -> fanout_alerted program = fanout_expected program);
   ]
 
+(** A page around an empty root, in parts, so that the expected output can be spelled out. *)
+type shell_page = {
+  head : string;  (** Markup in the head. *)
+  body : string;  (** From [<body>] to the end of the root's start tag. *)
+  closing : string;  (** The root's end tag and everything after it. *)
+  root : string;  (** The root's id. *)
+}
+
+let shell_gen =
+  let open Gen in
+  let snippets =
+    [ "<p>hi</p>"; "<!-- id=\"main\" -->"; " "; "\n"; "<div id=\"other\"></div>"; "<span data-id=\"main\"></span>"; "<i title='a>b'></i>"; "text" ]
+  in
+  let markup = map (String.concat "") (list_size (int_bound 4) (oneof_list snippets)) in
+  let* root = oneof_list [ "main"; "app" ] in
+  let* quote = oneof_list [ "\""; "'" ] in
+  let* tag = oneof_list [ "div"; "main"; "section" ] in
+  let* attributes = oneof_list [ ""; " class=\"x\""; " data-id=\"main\""; " title=\"<b>\"" ] in
+  let* head = markup in
+  let* before = markup in
+  let* after = markup in
+  return
+    {
+      head;
+      body = "<body>" ^ before ^ "<" ^ tag ^ attributes ^ " id=" ^ quote ^ root ^ quote ^ attributes ^ ">";
+      closing = "</" ^ tag ^ ">" ^ after ^ "</body></html>";
+      root;
+    }
+
+let shell_laws =
+  let opened { head; _ } = "<html><head>" ^ head in
+  let whole page = opened page ^ "</head>" ^ page.body ^ page.closing in
+  let html = Gen.(string_size ~gen:printable (int_bound 30)) in
+  let filled page early html = Result.map (fun shell -> Shell.fill shell html) (Shell.parse ~root:page.root early (whole page)) in
+  [
+    Test.make ~count:1000 ~name:"Shell: the HTML goes right inside the empty root, and nothing else changes"
+      ~print:Print.(pair whole string) (Gen.pair shell_gen html) (fun (page, html) ->
+        filled page Shell.Lost html = Ok (opened page ^ "</head>" ^ page.body ^ html ^ page.closing));
+    Test.make ~count:1000 ~name:"Shell: with early inputs kept, the capture script also goes right before </head>"
+      ~print:Print.(pair whole string) (Gen.pair shell_gen html) (fun (page, html) ->
+        filled page Shell.Kept html
+        = Ok (opened page ^ "<script>" ^ Melhole_server.capture ^ "</script></head>" ^ page.body ^ html ^ page.closing));
+    Test.make ~count:1000 ~name:"Shell: a filled root, a missing root, or no head before the root for the capture script is refused"
+      ~print:whole shell_gen (fun page ->
+        ( Shell.parse ~root:page.root Shell.Lost (opened page ^ "</head>" ^ page.body ^ "<b></b>" ^ page.closing),
+          Shell.parse ~root:"elsewhere" Shell.Lost (whole page),
+          Shell.parse ~root:page.root Shell.Kept (page.body ^ page.closing ^ "<head></head>") )
+        = (Error (`Shell (Shell.Filled_root page.root)), Error (`Shell (Shell.No_root "elsewhere")), Error (`Shell Shell.No_head)));
+  ]
+
 let () =
-  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ dom_props_laws @ fanout_laws))
+  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ dom_props_laws @ fanout_laws @ shell_laws))

@@ -1,0 +1,5 @@
+(executable
+ (name prerender)
+ (public_name melhole-prerender)
+ (package melhole)
+ (libraries melhole.server))

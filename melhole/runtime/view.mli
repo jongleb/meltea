@@ -111,7 +111,11 @@ type change = Changed | Unchanged
 val template : Template.t -> (Dom.node -> 'frame[@u]) -> 'frame duties -> 'frame template
 
 val hydratable :
-  Template.t -> (Dom.node -> 'frame[@u]) -> 'frame duties -> (Dom.node -> 'frame -> 'frame[@u]) -> 'frame template
+  Template.t ->
+  (Dom.node -> 'frame[@u]) ->
+  'frame duties ->
+  (Dom.node -> (unit -> 'frame) -> 'frame[@u]) ->
+  'frame template
 
 val compiled : 'frame template -> ('frame -> unit[@u]) -> child
 val static : Template.t -> child
@@ -244,6 +248,14 @@ val write_sole_text : Dom.element -> string -> unit
 val put_sole_text : input -> Dom.element -> string -> unit
 val write_attr : Dom.element -> string -> string option -> unit
 val put_attr : input -> Dom.element -> string -> string option -> unit
+
+val served_write_text : Dom.text -> string -> unit
+val served_put_text : input -> Dom.text -> string -> unit
+val served_write_sole_text : Dom.element -> string -> unit
+val served_put_sole_text : input -> Dom.element -> string -> unit
+val served_write_attr : Dom.element -> string -> string option -> unit
+val served_put_attr : input -> Dom.element -> string -> string option -> unit
+val served_set_prop : Hole.prop -> 'a -> unit
 
 (** The property a delegated handler for an event is kept in, the same for every element. *)
 val event_key : string -> string

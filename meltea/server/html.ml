@@ -8,6 +8,7 @@ let text content _ = Melhole_server.text content
 let int number _ = Melhole_server.text (string_of_int number)
 let float number _ = Melhole_server.text (Melhole_server.float number)
 let list views dispatch = Melhole_server.list (List.map (fun view -> view dispatch) views)
+let array views dispatch = Melhole_server.list (Array.to_list (Array.map (fun view -> view dispatch) views))
 let keyed views dispatch = Melhole_server.list (List.map (fun (_, view) -> view dispatch) views)
 let transition ~name:_ ?duration:_ view = view
 let transition_group ~name:_ ?duration:_ view = view

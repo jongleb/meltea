@@ -23,9 +23,10 @@ type 'frame template = {
   adopt : 'frame adoptable;
 }
 
-(** How a compiled template takes over a server's nodes: given its frame on a first, unplaced
-    clone, it makes its frame on the server's element. *)
-and 'frame adoptable = Not_hydratable | Adopts of (Dom.node -> 'frame -> 'frame[@u])
+(** How a compiled template takes over a server's nodes: it makes its frame on the server's element,
+    asking first, when it has text or child holes, for its frame on an unplaced clone, which knows
+    their values. *)
+and 'frame adoptable = Not_hydratable | Adopts of (Dom.node -> (unit -> 'frame) -> 'frame[@u])
 
 (** How a library's kind of child reaches its nodes, made once per kind. *)
 type 'value hosting = {
@@ -990,12 +991,15 @@ let adopted template refresh (position : Template.position) =
   | Not_hydratable -> mismatch ()
   | Adopts adopt ->
       let root = !medium.root position template.markup [@u] in
-      let serving = !medium in
-      medium := collecting;
-      let collected = template.make (Dom_api.to_node (Template.clone template.markup)) [@u] in
-      refresh collected [@u];
-      medium := serving;
-      let frame = adopt (Dom_api.to_node root) collected [@u] in
+      let frame =
+        adopt (Dom_api.to_node root) (fun () ->
+            let serving = !medium in
+            medium := collecting;
+            let collected = template.make (Dom_api.to_node (Template.clone template.markup)) [@u] in
+            refresh collected [@u];
+            medium := serving;
+            collected) [@u]
+      in
       refresh frame [@u];
       (root, frame)
 
@@ -1539,6 +1543,22 @@ let set_prop (hole : Hole.prop) value =
               Dom_api.set_property hole.element "value" chosen));
     hole.value <- Input value)
 
+let served_set_prop (hole : Hole.prop) value =
+  let shows name = Dom_api.same (Dom_api.property hole.element name) value in
+  let kept () = hole.value <- Input value in
+  match (!medium.adoption, hole.echo) with
+  | Server_nodes, Alone when Dom_api.same hole.value unset && shows hole.name -> kept ()
+  | Server_nodes, Default_value when Dom_api.same hole.value unset && shows hole.name && shows "defaultValue" ->
+      Events.track hole.element;
+      kept ()
+  | Server_nodes, Default_checked_at_mount
+    when Dom_api.same hole.value unset && shows hole.name && shows "defaultChecked" ->
+      Events.track hole.element;
+      kept ()
+  | Server_nodes, (Alone | Default_value | Default_checked_at_mount | Select_value)
+  | Fresh_nodes, (Alone | Default_value | Default_checked_at_mount | Select_value) ->
+      set_prop hole value
+
 external html_of : < __html : string > Js.t -> string = "__html" [@@mel.get]
 
 let restores = ref []
@@ -1643,6 +1663,29 @@ let write_attr element name value =
   | None -> Dom_api.remove_attribute element name
 
 let put_attr (Input last) element name value = if not (Dom_api.same last value) then write_attr element name value
+
+let served_write_text node value =
+  if not (Dom_api.same !medium.adoption Server_nodes && Dom_api.same (Dom_api.data (Dom_api.to_node node)) value) then
+    Dom_api.set_data node value
+
+let served_put_text (Input last) node value = if not (Dom_api.same last value) then served_write_text node value
+
+let served_write_sole_text element value =
+  if not (Dom_api.same !medium.adoption Server_nodes && Dom_api.same (Dom_api.text_content element) value) then
+    write_sole_text element value
+
+let served_put_sole_text (Input last) element value =
+  if not (Dom_api.same last value) then served_write_sole_text element value
+
+let served_write_attr element name value =
+  if
+    not
+      (Dom_api.same !medium.adoption Server_nodes
+      && Dom_api.same (Dom_api.get_attribute element name) (Js.Null.fromOption value))
+  then write_attr element name value
+
+let served_put_attr (Input last) element name value =
+  if not (Dom_api.same last value) then served_write_attr element name value
 
 let event_key event = Events.key_of event
 

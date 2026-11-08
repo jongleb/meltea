@@ -69,6 +69,8 @@ external set_attribute : Dom.element -> string -> string -> unit
 external remove_attribute : Dom.element -> string -> unit = "removeAttribute"
 [@@mel.send]
 
+external get_attribute : Dom.element -> string -> string Js.null = "getAttribute" [@@mel.send]
+
 external last_child : Dom.node -> Dom.node Js.null = "lastChild" [@@mel.get]
 external first_child_or_end : Dom.node -> Dom.node Js.null = "firstChild" [@@mel.get]
 external previous_sibling : Dom.node -> Dom.node Js.null = "previousSibling" [@@mel.get]
@@ -79,6 +81,7 @@ external unsafe_text : Dom.node -> Dom.text = "%identity"
 external node_name : Dom.node -> string = "nodeName" [@@mel.get]
 external inner_html : Dom.element -> string = "innerHTML" [@@mel.get]
 external set_text_content : Dom.node -> string -> unit = "textContent" [@@mel.set]
+external text_content : Dom.element -> string = "textContent" [@@mel.get]
 external property : Dom.element -> string -> 'a = "" [@@mel.get_index]
 external set_property : Dom.element -> string -> 'a -> unit = ""
 [@@mel.set_index]

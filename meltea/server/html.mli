@@ -14,6 +14,7 @@ val text : string -> 'msg t
 val int : int -> 'msg t
 val float : float -> 'msg t
 val list : 'msg t list -> 'msg t
+val array : 'msg t array -> 'msg t
 val keyed : (string * 'msg t) list -> 'msg t
 val transition : name:string -> ?duration:int -> 'msg t -> 'msg t
 val transition_group : name:string -> ?duration:int -> 'msg t -> 'msg t

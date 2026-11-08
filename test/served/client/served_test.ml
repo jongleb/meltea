@@ -154,4 +154,32 @@ let () =
                  remove served;
                  remove fresh;
                  expect (foreign, first, agreed) |. to_equal (0, true, true)))
+            [%mel.obj { numRuns = 300 }]);
+      test "hydration writes nothing the server's HTML already shows: no attribute, no text, no element added or taken away"
+        (fun () ->
+          let rewrites : 'record array -> string array =
+            [%mel.raw
+              {|function (records) {
+  const shown = (node) => node.nodeType === 1 || (node.nodeType === 3 && node.data !== "");
+  return records.flatMap((record) =>
+    record.type === "attributes" ? ["attribute " + record.attributeName + " of <" + record.target.nodeName + ">"]
+    : record.type === "characterData" ? ["text " + JSON.stringify(record.target.data)]
+    : [...record.addedNodes, ...record.removedNodes].filter(shown).map((node) => "child " + node.nodeName));
+}|}]
+          in
+          check
+            (property (tapes ~shortest:0 ~longest:80) (fun values ->
+                 let served = attached () in
+                 set_inner_html served (server_page values);
+                 let changes = observer (fun () -> ()) in
+                 Testing.observe changes served
+                   [%mel.obj { childList = true; subtree = true; attributes = true; characterData = true }];
+                 let hydrated =
+                   Program.sandbox ~start:Program.hydrate ~init:(Pages.decode values) ~update:Pages.update ~view:Pages.view served
+                 in
+                 let written = rewrites (take_records changes) in
+                 disconnect changes;
+                 Program.stop hydrated;
+                 remove served;
+                 expect written |. to_equal [||]))
             [%mel.obj { numRuns = 300 }]))
