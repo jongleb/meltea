@@ -171,6 +171,16 @@ let mark_view { rows; chosen; suffix } =
   in
   <ul>(Html.list (List.map row rows))</ul>
 
+let array_view { rows; chosen; suffix } =
+  let row item =
+    <li
+      key=(string_of_int item.id)
+      className=(match chosen with Some id when id = item.id -> "on" | Some _ | None -> "")>
+      (Html.text (item.title ^ suffix))
+    </li>
+  in
+  <ul>(Html.array (Array.map row (Array.of_list rows)))</ul>
+
 let glide_view { rows; chosen; suffix } =
   let row item =
     <li
@@ -306,6 +316,35 @@ let () =
              let tape = tape values in
              let root = create_element document "div" and fresh = create_element document "div" in
              let program = Program.sandbox ~init:mark_init ~update:mark_update ~view:mark_view root in
+             let model = ref mark_init in
+             List.iter
+               (fun _ ->
+                 let ids = List.map (fun item -> item.id) !model.rows in
+                 let pick () = List.nth_opt ids (draw tape (max 1 (List.length ids))) in
+                 let message =
+                   match draw tape 5 with
+                   | 0 -> Choose (match draw tape 3 with 0 -> None | _ -> pick ())
+                   | 1 -> Suffix [| ""; "!"; "?" |].(draw tape 3)
+                   | 2 -> Option.fold ~none:Grow ~some:(fun id -> Flip id) (pick ())
+                   | 3 -> Option.fold ~none:Grow ~some:(fun id -> Drop id) (pick ())
+                   | _ -> Grow
+                 in
+                 model := mark_update message !model;
+                 Program.dispatch program message;
+                 if draw tape 2 = 0 then Program.flush program)
+               (List.init (Array.length values / 3) Fun.id);
+             Program.flush program;
+             let expected = Program.sandbox ~init:!model ~update:mark_update ~view:mark_view fresh in
+             expect (shapes (as_node root)) |. to_equal (shapes (as_node fresh));
+             Program.stop program;
+             Program.stop expected))
+        [%mel.obj { numRuns = 300 }]);
+    test "rows of Html.array over Array.map show what the same rows of Html.list show, after any messages" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:60) (fun values ->
+             let tape = tape values in
+             let root = create_element document "div" and fresh = create_element document "div" in
+             let program = Program.sandbox ~init:mark_init ~update:mark_update ~view:array_view root in
              let model = ref mark_init in
              List.iter
                (fun _ ->

@@ -12,6 +12,10 @@ val text : string -> 'msg t
 val int : int -> 'msg t
 val float : float -> 'msg t
 val list : 'msg t list -> 'msg t
+
+(** [array (Array.map row items)] in a view compiles to the same keyed loop as [list (List.map row items)],
+    reading the array as it is. *)
+val array : 'msg t array -> 'msg t
 val keyed : (string * 'msg t) list -> 'msg t
 
 (** A long list cut into groups of [size] rows (default 100), each a [tag] element (default

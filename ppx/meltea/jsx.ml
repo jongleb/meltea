@@ -89,17 +89,23 @@ let mapper =
                       (looped inner)
                 | _ -> None)
             | Pexp_apply
-                ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "list"); _ }; _ },
+                ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", (("list" | "array") as container)); _ }; _ },
                   [
                     ( Nolabel,
                       {
                         pexp_desc =
                           Pexp_apply
-                            ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "List", "map") | Ldot (Ldot (Lident "Stdlib", "List"), "map"); _ }; _ },
+                            ( { pexp_desc = Pexp_ident { txt = Ldot ((Lident ("List" | "Array" as mapped) | Ldot (Lident "Stdlib", ("List" | "Array" as mapped))), "map"); _ }; _ },
                               [ (Nolabel, row); (Nolabel, items) ] );
                         _;
                       } );
                   ] ) ->
+                Option.bind
+                  (match (container, mapped) with
+                  | "list", "List" -> Some [%expr Stdlib.Array.of_list [%e self#expression items]]
+                  | "array", "Array" -> Some (self#expression items)
+                  | _ -> None)
+                @@ fun source ->
                 Element.loop self#frontend ~loc ~definitions:self#definitions
                   ~view:(fun expression ->
                     match expression.pexp_desc with
@@ -109,8 +115,7 @@ let mapper =
                     | _ -> false)
                   ~stable:[ [%expr __melhole_dispatch] ]
                   ~render:(fun view -> [%expr Html.render [%e view] __melhole_dispatch])
-                  ~numbering:Element.Items row
-                  [%expr Stdlib.Array.of_list [%e self#expression items]]
+                  ~numbering:Element.Items row source
             | _ -> None
             in
             looped item);

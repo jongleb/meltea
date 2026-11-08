@@ -17,6 +17,7 @@ let int number _ = View.text (string_of_int number)
 let float number _ = View.text (Js.Float.toString number)
 
 let list views dispatch = View.list (List.map (fun view -> view dispatch) views)
+let array views dispatch = View.list (Array.to_list (Array.map (fun view -> view dispatch) views))
 
 let keyed views dispatch = View.keyed (List.map (fun (key, view) -> (key, view dispatch)) views)
 
