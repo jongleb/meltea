@@ -12,7 +12,17 @@ type reads = Reads : { analysed : 'view; fields : int } -> reads | Unread
 (** The type declarations of the module that defines [update], as a digest. *)
 type shape = Shape of string | Unshaped
 
-type 'msg tracking = { changes : 'msg -> int; reads : int; shape : shape; listens : int }
+type ('model, 'msg) slice =
+  | Sliced : { analysed : 'view; draw : int -> 'model -> 'msg Html.t } -> ('model, 'msg) slice
+  | Unsliced
+
+type ('model, 'msg) tracking = {
+  changes : 'msg -> int;
+  reads : int;
+  shape : shape;
+  listens : int;
+  slice : ('model, 'msg) slice;
+}
 
 external same : 'a -> 'b -> bool = "%eq"
 
@@ -78,7 +88,9 @@ let launch course ~tracking ~mode ~view initial root =
   let page = mode.take (fun () -> Html.render (view initial) dispatch) root in
   let patch () =
     let changed = !pending in
-    if changed land tracking.reads <> 0 then View.patch (page.shown ()) (Html.render (view !model) dispatch);
+    if changed land tracking.reads <> 0 then
+      View.patch (page.shown ())
+        (Html.render (match tracking.slice with Sliced { draw; _ } -> draw changed !model | Unsliced -> view !model) dispatch);
     pending := 0;
     if changed land tracking.listens <> 0 then course.drawn changed !model dispatch
   in
@@ -123,11 +135,14 @@ let launch course ~tracking ~mode ~view initial root =
     (Js.Undefined.return { built = tracking.shape; current = (fun () -> !model); leave = halt });
   { send = dispatch; draw; halt }
 
-let everything = { changes = (fun _ -> -1); reads = -1; shape = Unshaped; listens = -1 }
+let everything = { changes = (fun _ -> -1); reads = -1; shape = Unshaped; listens = -1; slice = Unsliced }
 
 let mutable_read = ()
 
-let track ~update ~changes ~view ~reads ~shape ~subscriptions ~listens =
+let opened (View.Input slot) changed =
+  match View.unset with View.Input unset -> ( match same slot unset with true -> -1 | false -> changed)
+
+let track ~update ~changes ~view ~reads ~shape ~slice ~subscriptions ~listens =
   match (changes, reads) with
   | Changes found, Reads read when same found.analysed update && same read.analysed view ->
       {
@@ -138,6 +153,7 @@ let track ~update ~changes ~view ~reads ~shape ~subscriptions ~listens =
           (match listens with
           | Reads heard when same heard.analysed subscriptions -> heard.fields
           | Reads _ | Unread -> -1);
+        slice = (match slice with Sliced { analysed; _ } when same analysed view -> slice | Sliced _ | Unsliced -> Unsliced);
       }
   | (Changes _ | Unanalysed), (Reads _ | Unread) -> { everything with shape }
 

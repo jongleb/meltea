@@ -18,10 +18,14 @@ let mapper =
   object (self)
     inherit Scope.mapper as super
 
+    val mutable planned : Slice.t option = None
+
     method private frontend =
+      let locals = "__melhole_dispatch" :: self#locals in
       {
         Element.name = "meltea";
-        locals = "__melhole_dispatch" :: self#locals;
+        locals;
+        gates = (fun loc -> Option.fold ~none:Element.Ungated ~some:(fun plan -> Slice.gates plan ~locals loc) planned);
         definitions = self#definitions;
         map = self#expression;
         wrap = (fun loc child -> [%expr Html.node (fun __melhole_dispatch -> [%e child])]);
@@ -132,6 +136,58 @@ let mapper =
                 (List.filter (fun item -> match item.pstr_desc with Pstr_type _ -> true | _ -> false) items)))
       in
       let known = tracked in
+      let drawn =
+        (object
+           inherit [string list] Ast_traverse.fold as super
+
+           method! expression expression found =
+             match expression.pexp_desc with
+             | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Program", ("sandbox" | "element")); _ }; _ }, arguments) ->
+                 List.filter_map
+                   (fun (label, argument) ->
+                     match (label, argument.pexp_desc) with
+                     | Labelled "view", Pexp_ident { txt = Lident name; _ } -> Some name
+                     | _, _ -> None)
+                   arguments
+                 @ super#expression expression found
+             | _ -> super#expression expression found
+        end)
+          #structure items [ "view" ]
+      in
+      let closers =
+        let updates =
+          (object
+             inherit [string list] Ast_traverse.fold as super
+
+             method! expression expression found =
+               match expression.pexp_desc with
+               | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Program", ("sandbox" | "element")); _ }; _ }, arguments) ->
+                   List.filter_map
+                     (fun (label, argument) ->
+                       match (label, argument.pexp_desc) with
+                       | Labelled "update", Pexp_ident { txt = Lident name; _ } -> Some name
+                       | _, _ -> None)
+                     arguments
+                   @ super#expression expression found
+               | _ -> super#expression expression found
+          end)
+            #structure items [ "update" ]
+        in
+        match
+          List.filter_map
+            (fun item ->
+              match item.pstr_desc with
+              | Pstr_value (_, [ { pvb_pat = { ppat_desc = Ppat_var { txt; _ }; _ }; pvb_expr; _ } ]) when List.mem txt updates ->
+                  Some (Fields.branches pvb_expr)
+              | _ -> None)
+            items
+        with
+        | [] -> None
+        | found ->
+            Option.map
+              (List.concat_map (List.map (fun (branch : Fields.branch) -> Fields.mask (Fields.written branch.outcome))))
+              (List.fold_right (fun branches all -> Option.bind branches (fun branches -> Option.map (fun all -> branches :: all) all)) found (Some []))
+      in
       let mapped =
         List.concat_map
           (fun item ->
@@ -185,14 +241,40 @@ let mapper =
                               | false, _ -> None)))
               | _ -> []
             in
+            let sliced = ref [] in
+            let compiled =
             Hoist.structure
               (fun item ->
-                self#structure_item
-                  (match !Element.output with
-                  | Element.Server -> item
-                  | Element.Client_only | Element.Hydratable -> Remember.structure_item item))
+                match (!Element.output, item.pstr_desc) with
+                | Element.Server, _ -> self#structure_item item
+                | (Element.Client_only | Element.Hydratable), Pstr_value (Nonrecursive, [ ({ pvb_pat = { ppat_desc = Ppat_var { txt = name; _ }; _ }; _ } as binding) ])
+                  when List.mem name drawn && List.mem ("reads", name) tracked -> (
+                    let item = Remember.structure_item item in
+                    let binding = match item.pstr_desc with Pstr_value (_, [ binding ]) -> binding | _ -> binding in
+                    planned <- Slice.plan ~closers binding;
+                    let mapped = self#structure_item item in
+                    let plan = planned in
+                    planned <- None;
+                    match (plan, mapped.pstr_desc) with
+                    | Some plan, Pstr_value (flag, [ compiled ]) ->
+                        let view, slice = Slice.split plan compiled in
+                        Option.iter
+                          (fun slice ->
+                            let loc = item.pstr_loc in
+                            tracked <- ("slice", name) :: tracked;
+                            sliced :=
+                              [
+                                [%stri
+                                  let [%p Ast_builder.Default.pvar ~loc ("__melhole_slice_" ^ name)] =
+                                    Program.Sliced { analysed = [%e Ast_builder.Default.evar ~loc name]; draw = [%e slice] }];
+                              ])
+                          slice;
+                        { mapped with pstr_desc = Pstr_value (flag, [ view ]) }
+                    | (Some _ | None), _ -> mapped)
+                | (Element.Client_only | Element.Hydratable), _ -> self#structure_item (Remember.structure_item item))
               [ item ]
-            @ companions)
+            in
+            compiled @ !sliced @ companions)
           items
       in
       tracked <- known;
@@ -300,6 +382,7 @@ let mapper =
                               ~view:[%e view]
                               ~reads:[%e companion "reads" [%expr Program.Unread] view_path]
                               ~shape:[%e companion "shape" [%expr Program.Unshaped] update_path]
+                              ~slice:[%e companion "slice" [%expr Program.Unsliced] view_path]
                               ~subscriptions:
                                 [%e
                                   Option.fold ~none:[%expr ()] ~some:(fun (_, subscriptions) -> subscriptions) listening]

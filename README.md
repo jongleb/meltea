@@ -54,7 +54,18 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   immutable values make this exact: an unchanged reference is an unchanged value.
 - **Fields.** The compiler reads `update` and `view`: which model fields each message can change,
   which fields the view reads. A message that changes nothing the view reads does not call it, and
-  `subscriptions` are asked again only when a field they read changed.
+  `subscriptions` are asked again only when a field they read changed. It follows helpers of
+  `update`, model values in its `let`s and a `match` on `(message, …)`, and knows that
+  `{ model with f = model.f }` changes nothing.
+- **Program slices.** After the mount, `Program` does not call the view: it calls the view's page,
+  without the statements it does not read, with the fields the messages since the last draw wrote.
+  Each hole is evaluated only when a field it reads was written, so a message skips whole nested
+  templates, loops and `Html.memo` holes without looking at a guard inside them.
+
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/slices-dark.svg">
+    <img src="assets/slices.svg" alt="Program slices: the compiler splits the view into the lets its page reads and the statements it does not, and gives every hole the bits of the fields it reads; after Tick, which writes tick, Program calls the slice with that bit, the paragraph of tick is written and the input, the loop and Html.memo are skipped without looking at any guard inside them" width="100%">
+  </picture>
 - **Remembered values.** `let shown = List.filter … model.items` at the top of a view is computed
   again only when `model.items` or another input changed; otherwise it is the same list, and the
   holes that read it are skipped, so typing in a field does not check the list's rows.
@@ -101,7 +112,7 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/fields-dark.svg">
-  <img src="assets/fields.svg" alt="Fields an update changes, in Meltea's TodoMVC: meltea-ppx reads update and finds what each message can change: Type changes field, Route changes filter, Add changes todos, field and next, Ignore changes nothing, and Edit, which it does not recognise, changes all fields. It reads view the same way: todos, field, editing and filter, never next. After Ignore nothing the view reads changed, so the view is not called; after Type the view runs and one === per local picks the holes to write" width="100%">
+  <img src="assets/fields.svg" alt="Fields an update changes, in Meltea's TodoMVC: meltea-ppx reads update and finds what each message can change: Type changes field, Route changes filter, Add changes todos, field and next, Ignore changes nothing, and Edit, which it does not recognise, changes all fields. It reads view the same way: todos, field, editing and filter, never next. After Ignore nothing the view reads changed, so the view is not called; after Type the view's slice runs and evaluates only the holes that read field" width="100%">
 </picture>
 
 <picture>

@@ -245,9 +245,7 @@ let split_update message model =
   | Hide -> { model with hidden = bump model.hidden }
   | Keep -> model
 
-let split_view { shown; _ } =
-  incr views;
-  <p>(Html.int shown)</p>
+let split_view { shown; _ } = <p>(Html.int (incr views; shown))</p>
 
 (** An update analysed and then redefined: its companion describes the first one. *)
 module Shadowed = struct
@@ -281,7 +279,7 @@ let () =
              Program.stop program;
              expect text |. to_be (string_of_int !shown)))
         [%mel.obj { numRuns = 200 }]);
-    test "the view runs exactly when a message changed a field it reads" (fun () ->
+    test "the page is drawn exactly when a message changed a field the view reads" (fun () ->
       check
         (property (tapes ~shortest:4 ~longest:60) (fun values ->
              let tape = tape values in
@@ -824,7 +822,7 @@ let () =
                  Program.sandbox ~start:Program.hot
                    ~tracking:
                      (Program.track ~update ~changes:Program.Unanalysed ~view:Second.view ~reads:Program.Unread
-                        ~shape:(Program.Shape "other") ~subscriptions:() ~listens:Program.Unread)
+                        ~shape:(Program.Shape "other") ~slice:Program.Unsliced ~subscriptions:() ~listens:Program.Unread)
                    ~init ~update ~view:Second.view root
            in
            let shown = snapshot root in

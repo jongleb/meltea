@@ -537,7 +537,7 @@ let fanout_source program =
                 | [] -> Printf.sprintf "  | M%d -> model\n" index
                 | _ ->
                     Printf.sprintf "  | M%d -> { model with %s }\n" index
-                      (String.concat "; " (List.map (fun field -> Printf.sprintf "f%d = model.f%d" field field) written)))
+                      (String.concat "; " (List.map (fun field -> Printf.sprintf "f%d = model.f%d + 1" field field) written)))
               program.writes))
   in
   let lines =
@@ -648,5 +648,161 @@ let shell_laws =
         = (Error (`Shell (Shell.Filled_root page.root)), Error (`Shell (Shell.No_root "elsewhere")), Error (`Shell Shell.No_head)));
   ]
 
+(** What a generated branch writes into one field. *)
+type written_value =
+  | Same_field  (** [model.f] into [f]. *)
+  | Other_field of int  (** [model.g] into [f]. *)
+  | Constant of int  (** The constructor [C<n>]. *)
+  | Computed  (** [V (model.f0 + 1)]. *)
+
+(** The body of a generated branch of [update]. *)
+type written =
+  | Direct of (int * written_value) list
+  | Helped of (int * written_value) list  (** [{ (helper x) with … }]. *)
+  | Chained of (int * written_value) list * (int * written_value) list  (** [let next = { model with … } in { next with … }]. *)
+  | Branching of (int * written_value) list * (int * written_value) list  (** [if … then … else …]. *)
+  | Unchanged
+  | Opaque_call  (** [reset model]: a function the analysis cannot read. *)
+
+(** A generated [update]: its helper's own writes, its branches, and whether it matches a tuple. *)
+type lattice_program = { helper : (int * written_value) list; written : written list; scrutinee : [ `Message | `Tuple ] }
+
+let lattice_program =
+  let open Gen in
+  let writes =
+    let* fields = map (fun bits -> List.filter (fun index -> bits land (1 lsl index) <> 0) (List.init 5 Fun.id)) (int_bound 31) in
+    flatten_list
+      (List.map
+         (fun field ->
+           map
+             (fun value -> (field, value))
+             (oneof
+                [ pure Same_field; map (fun other -> Other_field ((field + 1 + other) mod 5)) (int_bound 3); map (fun index -> Constant index) (int_bound 2); pure Computed ]))
+         fields)
+  in
+  let* helper = writes in
+  let* written =
+    list_size (int_range 1 6)
+      (oneof
+         [
+           map (fun writes -> Direct writes) writes;
+           map (fun writes -> Helped writes) writes;
+           map2 (fun first second -> Chained (first, second)) writes writes;
+           map2 (fun first second -> Branching (first, second)) writes writes;
+           pure Unchanged;
+           pure Opaque_call;
+         ])
+  in
+  let* scrutinee = oneof_list [ `Message; `Tuple ] in
+  pure { helper = List.filter (fun (field, _) -> field <> 4) helper; written; scrutinee }
+
+let lattice_source program =
+  let value field written =
+    match written with
+    | Same_field -> Printf.sprintf "model.f%d" field
+    | Other_field other -> Printf.sprintf "model.f%d" other
+    | Constant index -> Printf.sprintf "C%d" index
+    | Computed -> "V (model.f0 + 1)"
+  in
+  let fields writes = String.concat "; " (List.map (fun (field, written) -> Printf.sprintf "f%d = %s" field (value field written)) writes) in
+  let record base writes = match writes with [] -> base | _ :: _ -> Printf.sprintf "{ %s with %s }" base (fields writes) in
+  let body written =
+    match written with
+    | Direct writes -> record "model" writes
+    | Helped writes -> record "(helper C2)" writes
+    | Chained (first, second) -> Printf.sprintf "let next = %s in %s" (record "model" first) (record "next" second)
+    | Branching (first, second) -> Printf.sprintf "if model.f0 = C0 then %s else %s" (record "model" first) (record "model" second)
+    | Unchanged -> "model"
+    | Opaque_call -> "reset model"
+  in
+  "let update message model =\n"
+  ^ Printf.sprintf "  let helper value = { model with %s } in\n" (fields ((4, Computed) :: program.helper))
+  ^ (match program.scrutinee with `Message -> "  match message with\n" | `Tuple -> "  match (message, model.f0) with\n")
+  ^ String.concat ""
+      (List.mapi
+         (fun index written ->
+           Printf.sprintf "  | M%d%s -> %s\n" index (match program.scrutinee with `Message -> "" | `Tuple -> ", _") (body written))
+         program.written)
+
+(** A field's change as the law expects it. *)
+type expected_change = Kept_field | Literal_field of string list | Set_field
+
+let lattice_expected program =
+  let change field written =
+    match written with
+    | Same_field -> Kept_field
+    | Other_field other when other = field -> Kept_field
+    | Other_field _ | Computed -> Set_field
+    | Constant index -> Literal_field [ Printf.sprintf "C%d" index ]
+  in
+  let over base writes = List.map (fun (field, written) -> (field, change field written)) writes @ List.filter (fun (field, _) -> not (List.mem_assoc field writes)) base in
+  let join first second =
+    match (first, second) with
+    | Set_field, _ | _, Set_field -> Set_field
+    | Kept_field, other | other, Kept_field -> other
+    | Literal_field one, Literal_field other -> Literal_field (List.sort_uniq compare (one @ other))
+  in
+  let joined first second =
+    List.map
+      (fun field ->
+        let at changes = Option.value ~default:Kept_field (List.assoc_opt field changes) in
+        (field, join (at first) (at second)))
+      (List.init 5 Fun.id)
+  in
+  let branch written =
+    match written with
+    | Direct writes -> Some (over [] writes)
+    | Helped writes -> Some (over (over [] ((4, Computed) :: program.helper)) writes)
+    | Chained (first, second) -> Some (over (over [] first) second)
+    | Branching (first, second) -> Some (joined (over [] first) (over [] second))
+    | Unchanged -> Some []
+    | Opaque_call -> None
+  in
+  let branches = List.map branch program.written in
+  let normal changes =
+    List.sort compare (List.filter_map (fun (field, change) -> match change with Kept_field -> None | _ -> Some (Printf.sprintf "f%d" field, change)) changes)
+  in
+  ( List.map (Option.map (fun changes -> List.map fst (normal changes))) branches,
+    List.fold_left (fun found branch -> match (found, branch) with Some found, Some branch -> Some (joined found branch) | _, _ -> None) (Some []) branches
+    |> Option.map normal )
+
+let lattice_found program =
+  let items = Ppxlib.Parse.implementation (Lexing.from_string (lattice_source program)) in
+  let update =
+    List.find_map
+      (fun (item : Ppxlib.structure_item) ->
+        match item.pstr_desc with Pstr_value (_, [ binding ]) -> Some binding.pvb_expr | _ -> None)
+      items
+  in
+  let normal (outcome : Meltea_ppx.Fields.outcome) =
+    match outcome with
+    | Unknown -> None
+    | Model changes ->
+        Some
+          (List.sort compare
+             (List.map
+                (fun (name, (change : Meltea_ppx.Fields.change)) ->
+                  ( name,
+                    match change with
+                    | Kept -> Kept_field
+                    | Literals (first, rest) -> Literal_field (first :: rest)
+                    | Set -> Set_field ))
+                changes))
+  in
+  Option.map
+    (fun branches ->
+      ( List.map
+          (fun (branch : Meltea_ppx.Fields.branch) ->
+            match Meltea_ppx.Fields.written branch.outcome with Every -> None | Named names -> Some names)
+          branches,
+        normal (Meltea_ppx.Fields.lattice branches) ))
+    (Option.bind update Meltea_ppx.Fields.branches)
+
+let lattice_laws =
+  [
+    Test.make ~name:"Fields: what each branch of update writes, and the lattice over all of them, agree with a model of the code"
+      ~count:1000 ~print:lattice_source lattice_program (fun program -> lattice_found program = Some (lattice_expected program));
+  ]
+
 let () =
-  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ dom_props_laws @ fanout_laws @ shell_laws))
+  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ dom_props_laws @ fanout_laws @ shell_laws @ lattice_laws))

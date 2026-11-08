@@ -29,8 +29,16 @@ type reads = Reads : { analysed : 'view; fields : int } -> reads | Unread
 (** The type declarations of the module that defines [update], as a digest. *)
 type shape = Shape of string | Unshaped
 
+(** The view's page as a function of the bits of the fields changed since its last draw, with the view it was found in. *)
+type ('model, 'msg) slice =
+  | Sliced : { analysed : 'view; draw : int -> 'model -> 'msg Html.t } -> ('model, 'msg) slice
+  | Unsliced
+
 (** What the compiler found in [update] and [view], checked to describe the functions in use. *)
-type 'msg tracking
+type ('model, 'msg) tracking
+
+(** The bits a template's refresh is narrowed to: [changed], or every bit while its frame is new. *)
+val opened : Melhole.View.input -> int -> int
 
 val mutable_read : unit
 [@@alert
@@ -43,12 +51,13 @@ val track :
   view:'view ->
   reads:reads ->
   shape:shape ->
+  slice:('model, 'msg) slice ->
   subscriptions:'subscriptions ->
   listens:reads ->
-  'msg tracking
+  ('model, 'msg) tracking
 
 val sandbox :
-  ?tracking:'msg tracking ->
+  ?tracking:('model, 'msg) tracking ->
   ?start:start ->
   init:'model ->
   update:('msg -> 'model -> 'model) ->
@@ -57,7 +66,7 @@ val sandbox :
   'msg t
 
 val element :
-  ?tracking:'msg tracking ->
+  ?tracking:('model, 'msg) tracking ->
   ?start:start ->
   init:'model * 'msg Cmd.t ->
   update:('msg -> 'model -> 'model * 'msg Cmd.t) ->

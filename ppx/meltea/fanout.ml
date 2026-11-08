@@ -54,8 +54,12 @@ let loops view =
               @ env)
               rest
         | Pexp_apply
-            ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", ("list" | "keyed")); _ }; _ },
-              [ (Nolabel, ({ pexp_desc = Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "List", "map"); _ }; _ }, _); _ } as items)) ] ) ->
+            ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", ("list" | "keyed" | "array")); _ }; _ },
+              [
+                ( Nolabel,
+                  ({ pexp_desc = Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ldot (Lident ("List" | "Array"), "map"); _ }; _ }, _); _ }
+                   as items) );
+              ] ) ->
             found := { at = expression.pexp_loc; reads = reads ~model env items } :: !found;
             walk env items
         | _ ->
@@ -161,7 +165,7 @@ let annotate items =
   in
   match (Option.bind (binding "update") Fields.branches, Option.map loops (binding "view")) with
   | Some branches, Some (_ :: _ as lists) ->
-      let constructors (case : case) =
+      let constructors (branch : Fields.branch) =
         let rec names pattern =
           match pattern.ppat_desc with
           | Ppat_construct ({ txt = Lident name; _ }, _) -> `Some [ name ]
@@ -172,20 +176,20 @@ let annotate items =
           | Ppat_alias (inner, _) | Ppat_constraint (inner, _) -> names inner
           | _ -> `All
         in
-        names case.pc_lhs
+        names branch.pattern
       in
       let messages =
-        List.concat_map (fun (case, _) -> match constructors case with `Some names -> names | `All -> []) branches
+        List.concat_map (fun branch -> match constructors branch with `Some names -> names | `All -> []) branches
       in
       let writes message =
         let rec go branches =
           match branches with
           | [] -> Fields.Named []
-          | (case, fields) :: rest -> (
-              match (constructors case, case.pc_guard) with
+          | (branch : Fields.branch) :: rest -> (
+              match (constructors branch, branch.coverage) with
               | `Some names, _ when not (List.mem message names) -> go rest
-              | (`Some _ | `All), None -> fields
-              | (`Some _ | `All), Some _ -> Fields.union fields (go rest))
+              | (`Some _ | `All), Total -> Fields.written branch.outcome
+              | (`Some _ | `All), Partial -> Fields.union (Fields.written branch.outcome) (go rest))
         in
         go branches
       in

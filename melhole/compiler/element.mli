@@ -30,6 +30,24 @@ type throwing =
 (** Whether a front end numbers the positions of children as React's [useId] does. *)
 type ids = Tree_ids | No_ids
 
+(** Whether the compiler already guards a hole by the locals it reads. *)
+type guarded = Guarded | Unguarded
+
+(** When a hole of a template whose front end knows what changed is evaluated. *)
+type gate =
+  | Gated of { mask : int; unmasked : string list }
+      (** When [opened] meets [mask], or one of these locals is not the one it was. *)
+  | Always
+
+(** How a template's refresh is narrowed to what changed since its last one. *)
+type gates =
+  | Ungated
+  | Gates of {
+      opened : Ppxlib.expression -> Ppxlib.expression;
+          (** Given the frame's first slot, the bits that changed, or every bit for a new frame. *)
+      gate : Ppxlib.expression -> guarded -> gate;
+    }
+
 (** How a front end shapes elements around the templates. *)
 type frontend = {
   name : string;  (** For error messages. *)
@@ -52,6 +70,7 @@ type frontend = {
   extra : string -> Dom_props.kind option;  (** Props the front end adds to reason-react's. *)
   each : Ppxlib.location -> Ppxlib.expression -> Ppxlib.expression option;
       (** A keyed loop for a child that maps a row function over a list. *)
+  gates : Ppxlib.location -> gates;  (** How the template at this site is narrowed. *)
 }
 
 (** Whether compiled templates can take over a server's HTML; the [-hydratable] flag of the ppx. *)

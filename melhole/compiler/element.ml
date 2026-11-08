@@ -45,6 +45,13 @@ type output = Client_only | Hydratable | Server
 
 let output = ref Client_only
 
+type guarded = Guarded | Unguarded
+type gate = Gated of { mask : int; unmasked : string list } | Always
+
+type gates =
+  | Ungated
+  | Gates of { opened : expression -> expression; gate : expression -> guarded -> gate }
+
 type frontend = {
   name : string;
   locals : string list;
@@ -62,6 +69,7 @@ type frontend = {
   classify : expression -> special option;
   extra : string -> Dom_props.kind option;
   each : location -> expression -> expression option;
+  gates : location -> gates;
 }
 
 (** What one DOM prop becomes. *)
@@ -754,15 +762,38 @@ let lowercase frontend ~loc ~attributes tag arguments =
             | Free.Volatile -> Free.Volatile)
       holes
   in
+  let gating = match role with `Row _ -> Ungated | `Child -> frontend.gates loc in
+  let gated =
+    List.map2
+      (fun guard (hole : expression Markup.hole) ->
+        match (gating, hole, guard) with
+        | Ungated, _, _ | Gates _, On_element (_, Ref, _), _ | Gates _, _, Free.Reads [] -> Always
+        | Gates { gate; _ }, (On_element (_, _, value) | At_position (_, _, _, value)), Free.Reads (_ :: _) -> gate value Guarded
+        | Gates { gate; _ }, (On_element (_, _, value) | At_position (_, _, _, value)), Free.Volatile -> gate value Unguarded)
+      guards holes
+  in
+  let opening =
+    match gating with
+    | Ungated -> None
+    | Gates { opened; _ } -> List.find_map (fun gate -> match gate with Gated _ -> Some opened | Always -> None) gated
+  in
   let variables =
     List.sort_uniq String.compare
-      (List.concat_map (fun guard -> match guard with Free.Reads names -> names | Free.Volatile -> []) guards)
+      (List.concat_map (fun guard -> match guard with Free.Reads names -> names | Free.Volatile -> []) guards
+      @ List.concat_map (fun gate -> match gate with Gated { unmasked; _ } -> unmasked | Always -> []) gated)
   in
   let constant = List.length variables in
   let mounted =
-    List.find_map
-      (fun guard -> match guard with Free.Reads [] -> Some constant | Free.Reads (_ :: _) | Free.Volatile -> None)
-      guards
+    match
+      ( List.find_map
+          (fun guard -> match guard with Free.Reads [] -> Some constant | Free.Reads (_ :: _) | Free.Volatile -> None)
+          guards,
+        variables,
+        opening )
+    with
+    | Some found, _, _ -> Some found
+    | None, [], Some _ -> Some constant
+    | None, _, _ -> None
   in
   let guard_slots = constant + Option.fold ~none:0 ~some:(fun _ -> 1) mounted in
   let value_slots =
@@ -929,6 +960,22 @@ let lowercase frontend ~loc ~attributes tag arguments =
               ])
       (List.combine guards holes)
   in
+  let sets =
+    List.map2
+      (fun set gate ->
+        match gate with
+        | Always -> set
+        | Gated { mask; unmasked } ->
+            [%expr
+              if
+                [%e
+                  List.fold_left
+                    (fun reached name -> [%expr [%e reached] || [%e flag (slot name)] == Melhole.View.Changed])
+                    [%expr __melhole_open land [%e eint ~loc mask] <> 0]
+                    unmasked]
+              then [%e set]])
+      sets gated
+  in
   let checks =
     List.mapi (fun index name -> (index, evar ~loc name)) variables
     @ Option.fold ~none:[] ~some:(fun index -> [ (index, [%expr ()]) ]) mounted
@@ -942,6 +989,11 @@ let lowercase frontend ~loc ~attributes tag arguments =
           [%e body]])
       checks
       (List.fold_right (fun set rest -> [%expr [%e set]; [%e rest]]) sets [%expr ()])
+  in
+  let body =
+    Option.fold ~none:body
+      ~some:(fun opened -> [%expr let __melhole_open = [%e opened (remembered 0)] in [%e body]])
+      opening
   in
   let unary lambda = pexp_record ~loc [ ({ txt = Ldot (Ldot (Lident "Js", "Fn"), "I1"); loc }, lambda) ] None in
   let binary lambda = pexp_record ~loc [ ({ txt = Ldot (Ldot (Lident "Js", "Fn"), "I2"); loc }, lambda) ] None in
