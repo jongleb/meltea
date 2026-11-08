@@ -2096,7 +2096,13 @@ let chunks ~size ~row_height ~tag child =
             | group :: rest -> group :: merged rest
             | [] -> []
           in
-          let groups_made = Array.of_list (merged (List.rev !made)) in
+          let packed = (Array.length entries + size - 1) / size in
+          let groups_made =
+            Array.of_list
+              (match List.compare_length_with !made ((2 * packed) + 1) > 0 with
+              | true -> merged (List.rev !made)
+              | false -> List.rev !made)
+          in
           let touched = Array.make (Array.length old) `Still in
           Array.iter
             (fun (group, members) ->
