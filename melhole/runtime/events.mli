@@ -23,6 +23,11 @@ val register : Dom.element -> string -> registration
     once, not per element. *)
 val delegate : string -> unit
 
+(** Listens once on [document] for an element being entered or left ([mouseenter], [mouseleave],
+    [pointerenter], [pointerleave]); compiled templates call it, so an app without such handlers
+    carries none of it. *)
+val delegate_crossing : string -> unit
+
 (** Records what an input or textarea shows now, its value or checked state, as React's value
     tracker does: [onchange], React's [onChange] on those, delivers an [input] or [change] event only
     when what the element shows differs from what was recorded. *)

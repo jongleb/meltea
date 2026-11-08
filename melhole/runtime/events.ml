@@ -22,6 +22,15 @@ let copy : string =
         return copies === 1 ? "$$melhole" : "$$melhole" + copies;
       })()|}]
 
+external related_target : Dom.event -> Dom.node option = "relatedTarget" [@@mel.get] [@@mel.return nullable]
+
+(** The nodes from the one a pointer came from or went to, up to the document. *)
+type ancestry
+
+external ancestry : unit -> ancestry = "Set" [@@mel.new]
+external ancestor_add : ancestry -> Dom.node -> unit = "add" [@@mel.send]
+external ancestor_has : ancestry -> Dom.node -> bool = "has" [@@mel.send]
+
 let keys = ref []
 
 let key_of event =
@@ -113,14 +122,17 @@ let delegate event =
       | _ -> Dom_api.add_document_listener Dom_api.document event deliver)
 
 let register element event =
-  match Melhole_shared.Delegation.of_event event with
-  | Delegated ->
+  match (Melhole_shared.Delegation.of_event event, Js.Undefined.toOption (delivery deliveries event)) with
+  | Delegated, _ ->
       delegate event;
       Delegated
-  | Direct ->
+  | (Crossing | Direct), Some _ -> Delegated
+  | (Crossing | Direct), None ->
       let key = key_of event in
       let listener native =
-        Option.iter (fun handle -> paced event handle native) (Dom_api.handler (Dom_api.to_node element) key)
+        match Js.Undefined.toOption (delivery deliveries event) with
+        | Some _ -> ()
+        | None -> Option.iter (fun handle -> paced event handle native) (Dom_api.handler (Dom_api.to_node element) key)
       in
       Dom_api.add_listener element event listener;
       Direct (fun () -> Dom_api.remove_listener element event listener)
@@ -137,18 +149,58 @@ let removal_of event =
       removals := (event, key) :: !removals;
       key
 
+let delegate_crossing event =
+  match Js.Undefined.toOption (delivery deliveries event) with
+  | Some _ -> ()
+  | None ->
+      let key = key_of event in
+      let entering = match event with "mouseenter" | "pointerenter" -> `Entering | _ -> `Leaving in
+      let deliver native =
+        Option.iter
+          (fun target ->
+            let others = ancestry () in
+            let rec collect node =
+              ancestor_add others node;
+              Option.iter collect (Dom_api.parent_node node)
+            in
+            Option.iter collect (related_target native);
+            let rec crossed node through =
+              match ancestor_has others node with
+              | true -> through
+              | false ->
+                  let through = node :: through in
+                  Option.fold ~none:through ~some:(fun parent -> crossed parent through) (Dom_api.parent_node node)
+            in
+            let outermost_first = crossed target [] in
+            List.iter
+              (fun node ->
+                Option.iter
+                  (fun handle ->
+                    Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
+                    paced event handle native)
+                  (Dom_api.handler node key))
+              (match entering with `Entering -> outermost_first | `Leaving -> List.rev outermost_first);
+            Dom_api.release_current_target native)
+          (Dom_api.target native)
+      in
+      deliver_with deliveries event deliver;
+      Dom_api.add_document_listener Dom_api.document
+        (match event with
+        | "mouseenter" -> "mouseover"
+        | "mouseleave" -> "mouseout"
+        | "pointerenter" -> "pointerover"
+        | _ -> "pointerout")
+        deliver
+
 let listen element event =
   match register element event with
   | Delegated -> ()
   | Direct remove -> Dom_api.set_property element (removal_of event) remove
 
 let unlisten element event =
-  match Melhole_shared.Delegation.of_event event with
-  | Delegated -> ()
-  | Direct ->
-      Option.iter
-        (fun remove -> remove ())
-        (Js.Undefined.toOption (Dom_api.property element (removal_of event) : (unit -> unit) Js.undefined))
+  Option.iter
+    (fun remove -> remove ())
+    (Js.Undefined.toOption (Dom_api.property element (removal_of event) : (unit -> unit) Js.undefined))
 
 external capture : (unit -> (Dom.event * string Js.undefined * bool Js.undefined) array) Js.undefined
   = "__melhole_early"

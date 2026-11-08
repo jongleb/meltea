@@ -677,8 +677,11 @@ let lowercase frontend ~loc ~attributes tag arguments =
               let registered =
                 match event.pexp_desc with
                 | Pexp_constant (Pconst_string (name, _, _)) -> (
-                    match Melhole_shared.Delegation.of_event name with
+                    match Melhole_shared.Delegation.compiled name with
                     | Delegated -> ignore (Hoist.hoist ~loc "delegated" [%expr Melhole.Events.delegate [%e event]]); effects
+                    | Crossing ->
+                        ignore (Hoist.hoist ~loc "delegated" [%expr Melhole.Events.delegate_crossing [%e event]]);
+                        effects
                     | Direct -> [%expr Melhole.Events.listen [%e element] [%e event]] :: effects)
                 | _ -> [%expr Melhole.Events.listen [%e element] [%e event]] :: effects
               in
@@ -965,8 +968,8 @@ let lowercase frontend ~loc ~attributes tag arguments =
              (fun index (hole : expression Markup.hole) ->
                match hole with
                | On_element (_, Handler event, _) -> (
-                   match Melhole_shared.Delegation.of_event event with
-                   | Delegated -> []
+                   match Melhole_shared.Delegation.compiled event with
+                   | Delegated | Crossing -> []
                    | Direct -> [ [%expr Melhole.Events.unlisten [%e read (original (hole_name index))] [%e estring ~loc event]] ])
                | On_element (_, (Attr _ | Prop _ | Control _ | Ref | Style | Sole_text), _) | At_position _ -> [])
              holes)
