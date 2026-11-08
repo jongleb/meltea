@@ -27,7 +27,9 @@ jobs:
       - run: opam exec -- dune build
       - name: native laws and ppx expect tests
         run: opam exec -- dune test
-      - name: laws in jsdom
+      - name: laws in jsdom, with the slow parts of the ratchet's corpus
+        env:
+          RATCHET_SLOW: "1"
         run: |
           opam exec -- dune build @runtest-js
           npx vitest run

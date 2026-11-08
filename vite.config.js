@@ -27,18 +27,40 @@ const reactNineteen = {
   },
 };
 
+// The mixed compat laws bind JavaScript components from mlx; each build takes them on its own React.
+const compatEnv = resolve("test/compat/env/libraries.mjs");
+const compatLibraries = {
+  name: "compat-libraries",
+  enforce: "pre",
+  async resolveId(source, importer) {
+    const melact = importer?.includes("/test/compat/melact/output/");
+    const react = importer?.includes("/test/compat/react/output/");
+    if (!melact && !react) return null;
+    if (source === "compat-layers") return resolve(melact ? "test/compat/env/layers.mjs" : "test/compat/layers-react.mjs");
+    if (melact && /^(react-select|react-window|@radix-ui\/)/.test(source)) return this.resolve(source, compatEnv, { skipSelf: true });
+    return null;
+  },
+};
+
 export default defineConfig({
-  plugins: [reactNineteen, melangeOutput],
+  plugins: [reactNineteen, compatLibraries, melangeOutput],
   // The emitted libraries live under node_modules; pre-bundling would cache
   // them across dune rebuilds.
   optimizeDeps: { noDiscovery: true, include: [] },
   test: {
     globals: true,
     environment: "jsdom",
-    include: ["_build/default/test/**/output/test/**/*_test.mjs"],
+    include: ["_build/default/test/**/output/test/**/*_test.mjs", "test/compat/*.test.mjs"],
     // test/typed/dual and test/typed/staged are the dual suite under staged_pps with and without -typed, checked
     // byte for byte against each other by dune; test/typed/probed runs it.
     exclude: ["**/node_modules/**", "_build/default/test/typed/dual/**", "_build/default/test/typed/staged/**"],
     setupFiles: ["./test/setup.js"],
+    // The ratchet's leak check collects garbage before it looks for nodes still reachable after an unmount.
+    poolOptions: { forks: { execArgv: ["--expose-gc"] } },
+    // The size ratchet bundles with esbuild, which needs Node's own typed arrays.
+    environmentMatchGlobs: [["**/test/ratchet/sizes/sizes_test.mjs", "node"]],
+    // The compat laws load the npm libraries twice: from the root on npm's React, and from
+    // test/compat/env on melact.compat, through Vite so that they share Melact's runtime with the app.
+    server: { deps: { inline: [/test\/compat\/env\/node_modules\/(?!hoist-non-react-statics|react-is|prop-types)/] } },
   },
 });
