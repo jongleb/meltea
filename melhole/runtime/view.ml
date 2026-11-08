@@ -2050,38 +2050,83 @@ let chunks ~size ~row_height ~tag child =
       Option.map
         (fun chunked ->
           let old = chunked.groups in
-          let kept = min count (Array.length old) in
-          let slice index = Array.sub entries (index * size) (min size (Array.length entries - (index * size))) in
-          let same_keys index =
-            match snd (Array.unsafe_get old index) with
-            | Keyed_state (keys, _) -> (
-                let next = slice index in
-                match Array.length keys = Array.length next with
-                | true -> (
-                    match Array.for_all2 (fun key (next_key, _) -> String.equal key next_key) keys next with
-                    | true -> `Same
-                    | false -> `Changed)
-                | false -> `Changed)
-            | _ -> `Changed
+          let home = Keyed.make () in
+          Array.iteri
+            (fun index (_, rows) ->
+              match rows with
+              | Keyed_state (keys, _) -> Array.iter (fun key -> Keyed.set home key index) keys
+              | _ -> ())
+            old;
+          let made = ref [] and rows = ref [] and filled = ref 0 and origin = ref `Start and last = ref (-1) in
+          let close () =
+            match !origin with
+            | `Start -> ()
+            | (`Kept _ | `Fresh) as group -> made := (group, Array.of_list (List.rev !rows)) :: !made
           in
-          let sameness = Array.init kept same_keys in
+          let opened group =
+            close ();
+            origin := group;
+            rows := [];
+            filled := 0
+          in
+          Array.iter
+            (fun ((key, _) as entry) ->
+              let from = Keyed.find home key in
+              (match (!origin, from > !last, from = !last) with
+              | _, true, _ when from >= 0 ->
+                  opened (`Kept from);
+                  last := from
+              | `Kept group, _, true when group = from && !filled < size -> ()
+              | (`Start | `Kept _ | `Fresh), _, _ -> if !filled >= size || !origin = `Start then opened `Fresh);
+              rows := entry :: !rows;
+              incr filled)
+            entries;
+          close ();
+          let rec merged groups =
+            match groups with
+            | (first, first_rows) :: (second, second_rows) :: rest
+              when Array.length first_rows + Array.length second_rows <= size
+                   && 2 * min (Array.length first_rows) (Array.length second_rows) < size ->
+                let group =
+                  match (first, second, Array.length first_rows >= Array.length second_rows) with
+                  | `Kept _, _, true | `Kept _, `Fresh, false -> first
+                  | _, `Kept _, _ | `Fresh, `Fresh, _ -> second
+                in
+                merged ((group, Array.append first_rows second_rows) :: rest)
+            | group :: rest -> group :: merged rest
+            | [] -> []
+          in
+          let groups_made = Array.of_list (merged (List.rev !made)) in
+          let touched = Array.make (Array.length old) `Still in
+          Array.iter
+            (fun (group, members) ->
+              Array.iter
+                (fun (key, _) ->
+                  let from = Keyed.find home key in
+                  match (group, from >= 0) with
+                  | `Kept into, true when into = from -> ()
+                  | `Kept into, true ->
+                      Array.unsafe_set touched from `Touched;
+                      Array.unsafe_set touched into `Touched
+                  | `Fresh, true -> Array.unsafe_set touched from `Touched
+                  | (`Kept _ | `Fresh), false -> ())
+                members)
+            groups_made;
           let pool = Keyed.make () and pooled = ref [] in
           Array.iteri
             (fun index (_, rows) ->
-              match (index < kept && Array.unsafe_get sameness index = `Same, rows) with
-              | true, _ -> ()
-              | false, Keyed_state (keys, items) ->
+              match (Array.unsafe_get touched index, rows) with
+              | `Touched, Keyed_state (keys, items) ->
                   Array.iteri
                     (fun at key ->
                       Keyed.set pool key (List.length !pooled);
                       pooled := (key, Array.unsafe_get items at) :: !pooled)
                     keys
-              | false, _ -> ())
+              | (`Touched | `Still), _ -> ())
             old;
           let pooled = Array.of_list (List.rev !pooled) in
           let claimed = Array.make (Array.length pooled) `Free in
-          let regrouped element index =
-            let rows = slice index in
+          let regrouped element members =
             let into = { Template.parent = Dom_api.to_node element; before = Js.null } in
             let items =
               Array.map
@@ -2093,27 +2138,57 @@ let chunks ~size ~row_height ~tag child =
                       visit live (fun [@u] node -> move into.parent node into.before);
                       live
                   | _ -> child.build into [@u])
-                rows
+                members
             in
-            (element, Keyed_state (Array.map fst rows, items))
+            (element, Keyed_state (Array.map fst members, items))
           in
           let after =
-            match kept with
-            | 0 -> position
-            | _ -> { position with before = Js.Null.fromOption (Dom_api.next_sibling (fst (Array.unsafe_get old (kept - 1)))) }
+            match Array.length old with
+            | 0 -> position.before
+            | length -> Js.Null.fromOption (Dom_api.next_sibling (fst (Array.unsafe_get old (length - 1))))
           in
+          let kept : [ `Dropped | `Kept | `Reused ] array = Array.make (Array.length old) `Dropped in
+          Array.iter (fun (group, _) -> match group with `Kept index -> Array.unsafe_set kept index `Kept | `Fresh -> ()) groups_made;
+          let spare =
+            ref
+              (List.filter_map
+                 (fun index ->
+                   match (Array.unsafe_get kept index, Array.unsafe_get touched index) with
+                   | `Dropped, `Touched -> Some index
+                   | `Dropped, `Still | (`Kept | `Reused), _ -> None)
+                 (List.init (Array.length old) (fun index -> index)))
+          in
+          let next = ref after in
           let groups =
-            Array.init count (fun index ->
-                match index < kept with
-                | true -> (
-                    let element, rows = Array.unsafe_get old index in
-                    match Array.unsafe_get sameness index with
-                    | `Same -> (element, update { parent = Dom_api.to_node element; before = Js.null } rows (group index))
-                    | `Changed -> regrouped element index)
-                | false ->
-                    let element = wrapper () in
-                    insert after (Dom_api.to_node element);
-                    regrouped element index)
+            Array.of_list
+              (Array.fold_right
+                 (fun (group, members) placed ->
+                   let element, live =
+                     match group with
+                     | `Kept index -> (
+                         let element, rows = Array.unsafe_get old index in
+                         match Array.unsafe_get touched index with
+                         | `Still ->
+                             (element, update { parent = Dom_api.to_node element; before = Js.null } rows (keyed (Array.to_list members)))
+                         | `Touched -> regrouped element members)
+                     | `Fresh -> (
+                         match !spare with
+                         | index :: rest ->
+                             spare := rest;
+                             Array.unsafe_set kept index `Reused;
+                             let element = fst (Array.unsafe_get old index) in
+                             (match Dom_api.same (Dom_api.next_sibling element) (Js.Null.toOption !next) with
+                             | true -> ()
+                             | false -> move position.parent (Dom_api.to_node element) !next);
+                             regrouped element members
+                         | [] ->
+                             let element = wrapper () in
+                             insert { position with before = !next } (Dom_api.to_node element);
+                             regrouped element members)
+                   in
+                   next := Js.Null.return (Dom_api.to_node element);
+                   (element, live) :: placed)
+                 groups_made [])
           in
           Array.iteri
             (fun at (_, live) ->
@@ -2124,8 +2199,13 @@ let chunks ~size ~row_height ~tag child =
                   release live)
             pooled;
           Array.iteri
-            (fun index (element, _) ->
-              match index < kept with true -> () | false -> Dom_api.remove_child position.parent element)
+            (fun index (element, rows) ->
+              match (Array.unsafe_get kept index, Array.unsafe_get touched index) with
+              | (`Kept | `Reused), _ -> ()
+              | `Dropped, `Touched -> Dom_api.remove_child position.parent element
+              | `Dropped, `Still ->
+                  release rows;
+                  Dom_api.remove_child position.parent element)
             old;
           chunked.groups <- groups;
           current)
