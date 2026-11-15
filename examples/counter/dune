@@ -4,4 +4,4 @@
  (module_systems
   (es6 mjs))
  (preprocess
-  (pps melange.ppx meltea-ppx)))
+  (staged_pps melange.ppx meltea-ppx -- -typed)))

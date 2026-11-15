@@ -57,14 +57,9 @@ class mapper =
                         match (found, expression.pexp_desc) with
                         | `Hooked, _ -> `Hooked
                         | `Pure, Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
-                            match Longident.last_exn txt with
-                            | "use" -> `Hooked
-                            | name
-                              when String.length name > 3
-                                   && String.equal (String.sub name 0 3) "use"
-                                   && Char.uppercase_ascii name.[3] = name.[3] ->
-                                `Hooked
-                            | _ -> super#expression expression found)
+                            match Hook_name.of_name (Longident.last_exn txt) with
+                            | Hook _ -> `Hooked
+                            | Plain -> super#expression expression found)
                         | `Pure, _ -> super#expression expression found
                     end
                   in

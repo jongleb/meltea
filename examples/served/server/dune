@@ -5,7 +5,7 @@
  (name server)
  (libraries meltea.server)
  (preprocess
-  (pps meltea-ppx -server)))
+  (staged_pps meltea-ppx -- -server -typed)))
 
 (rule
  (targets index.html)

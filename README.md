@@ -101,7 +101,7 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   </picture>
 - **Effects.** `Cmd` and `Sub` are values that describe effects; `Program` runs them.
 - **Server.** `Program.render` writes HTML in React's format, `~start:Program.hydrate` takes it over
-  in the browser; compile with `(pps melange.ppx meltea-ppx -hydratable)` to include the code that
+  in the browser; compile with `(staged_pps melange.ppx meltea-ppx -- -hydratable -typed)` to include the code that
   does it. On a server the same module builds against `meltea.server` with `meltea-ppx -server`:
   the view compiles to code that writes strings, with no DOM, natively or in Node.
   `Melhole_server.capture` in the page's head keeps the clicks and typing made before the code
@@ -202,12 +202,12 @@ One module with the model, `update` and `view` builds for both sides
 (executable                              ; the server, native
  (name server)
  (libraries meltea.server)
- (preprocess (pps meltea-ppx -server)))
+ (preprocess (staged_pps meltea-ppx -- -server -typed)))
 
 (melange.emit                            ; the browser
  (target app)
  (libraries meltea)
- (preprocess (pps melange.ppx meltea-ppx -hydratable)))
+ (preprocess (staged_pps melange.ppx meltea-ppx -- -hydratable -typed)))
 ```
 
 ```ocaml
@@ -239,10 +239,13 @@ their OCaml types; a typo is a compile error that names the element.
 (melange.emit
  (target app)
  (libraries meltea)
- (preprocess (pps melange.ppx meltea-ppx)))
+ (preprocess (staged_pps melange.ppx meltea-ppx -- -typed)))
 ```
 
-and `(dialect (name mlx) …)` in `dune-project` for `.mlx` files. Meltea needs OCaml ≥ 5.4,
+and `(dialect (name mlx) …)` in `dune-project` for `.mlx` files. Under `staged_pps` the compiler
+runs `meltea-ppx` with the types of the build, and `-typed` uses them, for one, to warn at a view
+that reads a model field that can change in place; plain `(pps melange.ppx meltea-ppx)` works too,
+without these checks. Meltea needs OCaml ≥ 5.4,
 Melange ≥ 7.0 and dune ≥ 3.16; install it with `opam install meltea meltea-ppx`, or, until the
 packages are in opam-repository, pin them from the release tag:
 `opam pin add melhole.0.1.0 git+https://github.com/jongleb/melact#0.1.0`, and the same for

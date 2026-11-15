@@ -2,6 +2,9 @@ open Ocaml_common
 
 type t = Immediate | Immutable_boxed | Mutable_inside | Unknown
 
+(** Where a type stands in one classification. *)
+type visit = Visiting | Classified of t
+
 let of_answer ({ env; type_expr } : Answer.t) =
   let boxed parts =
     List.fold_left
@@ -21,8 +24,20 @@ let of_answer ({ env; type_expr } : Answer.t) =
       "Stdlib__Weak.t";
     ]
   in
-  let rec classify seen type_expr =
-    match Types.get_desc (Ctype.expand_head_opt env type_expr) with
+  let nodes = Hashtbl.create 64 and names = Hashtbl.create 64 in
+  let remembered table key compute =
+    match Hashtbl.find_opt table key with
+    | Some Visiting -> Immutable_boxed
+    | Some (Classified found) -> found
+    | None ->
+        Hashtbl.replace table key Visiting;
+        let found = compute () in
+        Hashtbl.replace table key (Classified found);
+        found
+  in
+  let rec classify seen type_expr = remembered nodes (Types.get_id type_expr) (fun () -> shaped seen type_expr)
+  and shaped seen type_expr =
+    match Types.get_desc type_expr with
     | Types.Tarrow _ | Types.Tfunctor _ -> Immutable_boxed
     | Types.Ttuple items -> boxed (List.map (fun (_, item) -> classify seen item) items)
     | Types.Tpoly (inner, _) -> classify seen inner
@@ -38,7 +53,8 @@ let of_answer ({ env; type_expr } : Answer.t) =
                    | Types.Rpresent (Some held) -> [ classify seen held ]
                    | Types.Reither (_, held, _) -> List.map (classify seen) held)
                  (Types.row_fields row)))
-    | Types.Tconstr (path, arguments, _) -> named seen path arguments
+    | Types.Tconstr (path, arguments, _) ->
+        remembered names (path, List.map Types.get_id arguments) (fun () -> named seen path arguments)
     | Types.Tvar _ | Types.Tunivar _ | Types.Tobject _ | Types.Tfield _ | Types.Tnil | Types.Tlink _ | Types.Tsubst _
     | Types.Tpackage _ ->
         Unknown
@@ -68,13 +84,12 @@ let of_answer ({ env; type_expr } : Answer.t) =
                      | false -> classify seen field.type_expr)
                    fields)
         | Answer.Function _ | Answer.Named _ | Answer.Other -> Unknown)
-    | None when List.exists (fun (visited, given) -> Path.same visited path && List.equal Types.eq_type given arguments) seen ->
-        Immutable_boxed
     | None
-      when List.exists (fun (visited, _) -> Path.same visited path) seen
+      when List.exists (Path.same path) seen
            &&
            match Env.find_type path env with
-           | { type_kind = Types.Type_record ([ _ ], Types.Record_unboxed _) | Types.Type_variant ([ _ ], Types.Variant_unboxed); _ } ->
+           | { type_kind = Types.Type_record ([ _ ], Types.Record_unboxed _) | Types.Type_variant ([ _ ], Types.Variant_unboxed); _ }
+           | { type_kind = Types.Type_abstract _; type_manifest = Some _; _ } ->
                false
            | _ -> true
            | exception Not_found -> true ->
@@ -83,7 +98,7 @@ let of_answer ({ env; type_expr } : Answer.t) =
         match Env.find_type path env with
         | exception Not_found -> Unknown
         | declaration -> (
-            let seen = (path, arguments) :: seen in
+            let seen = path :: seen in
             let instance held =
               match Ctype.apply env declaration.type_params held arguments with
               | exception Ctype.Cannot_apply -> Unknown
@@ -98,8 +113,9 @@ let of_answer ({ env; type_expr } : Answer.t) =
                      | Asttypes.Immutable, Asttypes.Nonatomic -> instance label.ld_type)
                    labels)
             in
-            match declaration.type_kind with
-            | Types.Type_abstract _ | Types.Type_external _ -> (
+            match (declaration.type_kind, declaration.type_manifest) with
+            | Types.Type_abstract _, Some manifest -> instance manifest
+            | (Types.Type_abstract _ | Types.Type_external _), _ -> (
                 match
                   List.exists
                     (String.equal (Answer.name env path))
@@ -107,13 +123,13 @@ let of_answer ({ env; type_expr } : Answer.t) =
                 with
                 | true -> Mutable_inside
                 | false -> Unknown)
-            | Types.Type_open -> Unknown
-            | Types.Type_record ([ label ], Types.Record_unboxed _) -> instance label.ld_type
-            | Types.Type_record (labels, _) -> fields labels
-            | Types.Type_variant ([ { cd_args = Types.Cstr_tuple [ held ]; _ } ], Types.Variant_unboxed) -> instance held
-            | Types.Type_variant ([ { cd_args = Types.Cstr_record [ label ]; _ } ], Types.Variant_unboxed) ->
+            | Types.Type_open, _ -> Unknown
+            | Types.Type_record ([ label ], Types.Record_unboxed _), _ -> instance label.ld_type
+            | Types.Type_record (labels, _), _ -> fields labels
+            | Types.Type_variant ([ { cd_args = Types.Cstr_tuple [ held ]; _ } ], Types.Variant_unboxed), _ -> instance held
+            | Types.Type_variant ([ { cd_args = Types.Cstr_record [ label ]; _ } ], Types.Variant_unboxed), _ ->
                 instance label.ld_type
-            | Types.Type_variant (constructors, _) ->
+            | Types.Type_variant (constructors, _), _ ->
                 constructed
                   (List.concat_map
                      (fun (constructor : Types.constructor_declaration) ->

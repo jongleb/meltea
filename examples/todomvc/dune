@@ -4,7 +4,7 @@
  (modes melange)
  (libraries meltea jsonkit-melange melange.dom)
  (preprocess
-  (pps melange.ppx meltea-ppx -hydratable jsonkit-melange.ppx)))
+  (staged_pps melange.ppx meltea-ppx jsonkit-melange.ppx -- -hydratable -typed)))
 
 (melange.emit
  (target output)
@@ -13,4 +13,4 @@
  (module_systems
   (es6 mjs))
  (preprocess
-  (pps melange.ppx meltea-ppx)))
+  (staged_pps melange.ppx meltea-ppx -- -typed)))

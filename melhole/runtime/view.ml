@@ -120,7 +120,7 @@ type live =
       root : ('frame -> Dom.element[@u]);
       source : input;
       items : 'item array;
-      keys : string array;
+      keys : Reconcile.key array;
       outer : input array;
       projections : input array;
       frames : 'frame array;
@@ -245,7 +245,11 @@ type medium = {
     'made array[@u]);
       (** Makes children in order; the last argument gives the node after one, from where it started. *)
   aside : ((unit -> live[@u]) -> live[@u]);  (** Children that live elsewhere, like a portal's. *)
+  adopt : 'frame. ('frame template -> ('frame -> unit[@u]) -> Template.position -> Dom.element * 'frame[@u]);
+      (** Takes the server's nodes of a template over, as its frame. *)
 }
+
+let mismatch () = Js.Exn.raiseError "melhole: the HTML from the server does not match the view"
 
 let browser =
   {
@@ -269,6 +273,7 @@ let browser =
             done;
             made);
     aside = (fun [@u] build -> build () [@u]);
+    adopt = (fun [@u] _ _ _ -> mismatch ());
   }
 
 let medium = ref browser
@@ -356,9 +361,13 @@ let remember memory inputs compute =
       memory.kept <- Some value;
       value
 
-type order = In_document_order | Out_of_order
+type order = In_document_order | Out_of_order | Last_item_first
 
 let patch_order = ref In_document_order
+
+type visit = Opened | Next_item | Closed
+
+let item_visits = ref (fun [@u] _ -> ())
 
 let out_of_order run =
   let saved = !patch_order in
@@ -371,15 +380,30 @@ let out_of_order run =
       patch_order := saved;
       raise error
 
+let last_item_first run =
+  let saved = !patch_order in
+  patch_order := (match saved with Out_of_order -> Out_of_order | In_document_order | Last_item_first -> Last_item_first);
+  !item_visits Opened [@u];
+  match run () with
+  | result ->
+      !item_visits Closed [@u];
+      patch_order := saved;
+      result
+  | exception error ->
+      !item_visits Closed [@u];
+      patch_order := saved;
+      raise error
+
 let backwards count (position : Template.position) make front =
   match count with
   | 0 -> [||]
   | _ ->
-      out_of_order (fun () ->
+      last_item_first (fun () ->
           let last = make (count - 1) position [@u] in
           let result = Array.make count last in
           let rec fill i before =
             if i >= 0 then (
+              !item_visits Next_item [@u];
               let made = make i { position with before } [@u] in
               Array.unsafe_set result i made;
               fill (i - 1) (front made before [@u]))
@@ -458,7 +482,7 @@ let keyed entries =
       (fun [@u] position live ->
         match live with
         | Keyed_state (old_keys, items) ->
-            let plan = Reconcile.plan ~old:old_keys ~next:keys in
+            let plan = Reconcile.plan ~old:(Reconcile.string_keys old_keys) ~next:(Reconcile.string_keys keys) in
             (match spanned position live items plan.dropped with
             | Whole ->
                 Dom_api.set_text_content position.parent "";
@@ -479,6 +503,8 @@ let keyed entries =
             Some (Keyed_state (keys, items))
         | _ -> None);
   }
+
+let entry child = match child.shape with Entry (key, inner) -> Some (key, inner) | Single | Nothing | Many _ | Entries _ | Deferred _ -> None
 
 let with_key key child =
   let keep inner = One_keyed_state (key, inner) in
@@ -842,6 +868,7 @@ let each site numbering source listed render project pieces outer selectors =
                     (match Origin.kept_from (Array.unsafe_get origins index) with
                     | Some from when from = index -> ()
                     | Some _ | None ->
+                        !item_visits Next_item [@u];
                         Array.unsafe_set lives index
                           (update
                              { position with before = ahead (index + 1) }
@@ -849,10 +876,10 @@ let each site numbering source listed render project pieces outer selectors =
                              (described index)));
                     refresh (index - 1))
                 in
-                out_of_order (fun () -> refresh (count - 1));
+                last_item_first (fun () -> refresh (count - 1));
                 Some (Each_state { site; source = Input source; items; keys; outer; projections; lives; selectors; indexes = Unindexed })
             | _, (`Same | `Moved) ->
-                let plan = Reconcile.plan ~old:old.keys ~next:keys in
+                let plan = Reconcile.plan ~old:(Reconcile.string_keys old.keys) ~next:(Reconcile.string_keys keys) in
                 (match spanned position live old.lives plan.dropped with
                 | Whole ->
                     Dom_api.set_text_content position.parent "";
@@ -970,14 +997,12 @@ let template markup make duties = { markup; make; duties; witness = Witness.make
 
 let hydratable markup make duties adopt = { markup; make; duties; witness = Witness.make (); adopt = Adopts adopt }
 
-let mismatch () = Js.Exn.raiseError "melhole: the HTML from the server does not match the view"
-
 let found node =
   match Js.Null.toOption node with
   | None -> "nothing"
   | Some node -> (
       match Dom_api.node_type node with
-      | 1 -> "<" ^ String.lowercase_ascii (Dom_api.node_name node) ^ ">"
+      | 1 -> "<" ^ Dom_api.lowercase (Dom_api.node_name node) ^ ">"
       | 3 -> "the text \"" ^ Dom_api.data node ^ "\""
       | _ -> "a comment")
 
@@ -986,7 +1011,8 @@ let expected what node =
 
 let collecting = { browser with opened = (fun [@u] _ -> Collecting { given = empty }) }
 
-let adopted template refresh (position : Template.position) =
+let adopted =
+  fun [@u] (template : _ template) refresh (position : Template.position) ->
   match template.adopt with
   | Not_hydratable -> mismatch ()
   | Adopts adopt ->
@@ -1004,8 +1030,8 @@ let adopted template refresh (position : Template.position) =
       (root, frame)
 
 let rows (type frame source item) (source : source) (listed : source -> item array) (template : frame template)
-    (root : (frame -> Dom.element)[@u]) (refresh : (frame -> item -> unit)[@u]) (key : (item -> string)[@u]) project
-    pieces outer selectors =
+    (root : (frame -> Dom.element)[@u]) (refresh : (frame -> item -> unit)[@u]) (key : (item -> Reconcile.key)[@u])
+    project pieces outer selectors =
   let showing (items : item array) =
   let count = Array.length items in
   let mount (position : Template.position) item =
@@ -1016,7 +1042,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
           let frame = template.make (Dom_api.to_node made) [@u] in
           refresh frame item [@u];
           (made, frame)
-      | Server_nodes -> adopted template (fun [@u] frame -> refresh frame item [@u]) position
+      | Server_nodes -> !medium.adopt template (fun [@u] frame -> refresh frame item [@u]) position [@u]
     in
     placed position made template frame;
     frame
@@ -1034,7 +1060,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
     shape = Single;
     build =
       (fun [@u] position ->
-        let keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
+        let keys = (match count with 0 -> Reconcile.string_keys no_keys | _ -> Array.make count (Reconcile.string_key "")) in
         let frames =
           !medium.built count position
             (fun [@u] index at ->
@@ -1090,7 +1116,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                   | true -> in_place (index + 1)
                   | false -> (
                       let named = key item [@u] in
-                      match String.equal named (Array.unsafe_get old.keys index) with
+                      match Dom_api.same named (Array.unsafe_get old.keys index) with
                       | true -> in_place (index + 1)
                       | false -> `Rearranged_at (index, named)))
             in
@@ -1105,7 +1131,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                     | true -> differing (index + 1) found size
                     | false -> (
                         let named = key item [@u] in
-                        match String.equal named (Array.unsafe_get old.keys index) with
+                        match Dom_api.same named (Array.unsafe_get old.keys index) with
                         | true -> differing (index + 1) found size
                         | false -> differing (index + 1) ((index, named) :: found) (size + 1)))
               in
@@ -1122,7 +1148,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                           | true -> None
                           | false -> (
                               match
-                                ( String.equal wanted (Array.unsafe_get old.keys (fst (Array.unsafe_get moved source))),
+                                ( Dom_api.same wanted (Array.unsafe_get old.keys (fst (Array.unsafe_get moved source))),
                                   Array.exists (fun claimed -> claimed = source) sources )
                               with
                               | true, false -> Some source
@@ -1282,7 +1308,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                 done;
                 Some (shown items old.keys projections frames !indexes)
             | `Rearranged ->
-            let next = Array.make count Origin.fresh and keys = (match count with 0 -> no_keys | _ -> Array.make count "") in
+            let next = Array.make count Origin.fresh and keys = (match count with 0 -> Reconcile.string_keys no_keys | _ -> Array.make count (Reconcile.string_key "")) in
             let projections = (match count * pieces with 0 -> no_inputs | size -> Array.make size unset) in
             let fits from item =
               from >= 0 && from < old_count
@@ -1322,7 +1348,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
               match index = count with
               | true -> `Same
               | false ->
-                  if String.equal (Array.unsafe_get keys index) (Array.unsafe_get old.keys index) then
+                  if Dom_api.same (Array.unsafe_get keys index) (Array.unsafe_get old.keys index) then
                     order (index + 1)
                   else `Moved
             in
@@ -1420,7 +1446,7 @@ let compiled (type frame) (template : frame template) (refresh : (frame -> unit)
               let frame = template.make (Dom_api.to_node root) [@u] in
               refresh frame [@u];
               (root, frame)
-          | Server_nodes -> adopted template refresh position
+          | Server_nodes -> !medium.adopt template refresh position [@u]
         in
         placed position root template frame;
         Compiled_state { template; frame; root });
@@ -1648,12 +1674,12 @@ let set_handler (hole : Hole.handler) next = Events.set hole.element hole.key ne
 
 let text_at position = !medium.text position None [@u]
 
-let put_text (Input last) node value = if not (Dom_api.same last value) then Dom_api.set_data node value
+let put_text (Input last) node value = if not (Dom_api.same last value) then Dom_api.show node value
 
 let write_sole_text element value =
   match Dom_api.first_child element with
-  | Some node when Dom_api.node_type node = 3 -> Dom_api.set_data (Dom_api.unsafe_text node) value
-  | Some _ | None -> Dom_api.set_text_content (Dom_api.to_node element) value
+  | Some node when Dom_api.node_type node = 3 -> Dom_api.show (Dom_api.unsafe_text node) value
+  | Some _ | None -> Dom_api.show_content (Dom_api.to_node element) value
 
 let put_sole_text (Input last) element value = if not (Dom_api.same last value) then write_sole_text element value
 
@@ -1672,7 +1698,7 @@ let served_put_text (Input last) node value = if not (Dom_api.same last value) t
 
 let served_write_sole_text element value =
   if not (Dom_api.same !medium.adoption Server_nodes && Dom_api.same (Dom_api.text_content element) value) then
-    write_sole_text element value
+    write_sole_text element (Dom_api.shown_string value)
 
 let served_put_sole_text (Input last) element value =
   if not (Dom_api.same last value) then served_write_sole_text element value
@@ -1787,7 +1813,7 @@ let adopt_element cursor tag =
   match Js.Null.toOption cursor.at with
   | Some node
     when Dom_api.node_type node = 1
-         && String.equal (String.lowercase_ascii (Dom_api.node_name node)) (String.lowercase_ascii tag) ->
+         && String.equal (Dom_api.lowercase (Dom_api.node_name node)) (Dom_api.lowercase tag) ->
       cursor.at <- Dom_api.following_sibling node;
       node
   | Some _ | None -> expected ("<" ^ tag ^ ">") cursor.at
@@ -1940,9 +1966,9 @@ let tpl_instance markup values =
         Array.iteri
           (fun at hole ->
             match hole with
-            | Template.Text (parent, before) when before = index && List.equal Int.equal parent path ->
+            | Template.Text (parent, before) when before = index && List.equal (fun (a : int) b -> a = b) parent path ->
                 slot cursor at Before_next
-            | Child (parent, before) when before = index && List.equal Int.equal parent path ->
+            | Child (parent, before) when before = index && List.equal (fun (a : int) b -> a = b) parent path ->
                 slot cursor at ending;
                 taken := ending
             | Text _ | Child _ | Attr _ | Prop _ | Handler _ | Ref _ | Style _ | Class_list _ -> ())
@@ -1966,7 +1992,7 @@ let tpl_instance markup values =
       Template.element
         (Option.get
            (List.find_map
-              (fun (known, server) -> match List.equal Int.equal known path with true -> Some server | false -> None)
+              (fun (known, server) -> match List.equal (fun (a : int) b -> a = b) known path with true -> Some server | false -> None)
               !elements))
     in
     let sites =
@@ -2120,7 +2146,7 @@ let chunks ~size ~row_height ~tag child =
                   opened (`Kept from);
                   last := from
               | `Kept group, _, true when group = from && !filled < size -> ()
-              | (`Start | `Kept _ | `Fresh), _, _ -> if !filled >= size || !origin = `Start then opened `Fresh);
+              | (`Start | `Kept _ | `Fresh), _, _ -> if !filled >= size || (match !origin with `Start -> true | `Kept _ | `Fresh -> false) then opened `Fresh);
               rows := entry :: !rows;
               incr filled)
             entries;

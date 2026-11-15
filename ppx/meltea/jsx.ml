@@ -411,7 +411,7 @@ let mapper =
       | _ -> super#expression expression
   end
 
-let structure items = mapper#structure items
+let structure items = mapper#structure (Dead.annotate items)
 let () =
   Driver.add_arg "-hydratable"
     (Arg.Unit (fun () -> Element.output := Element.Hydratable))

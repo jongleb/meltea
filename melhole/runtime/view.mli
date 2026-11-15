@@ -23,6 +23,9 @@ val empty : child
 val list : child list -> child
 val keyed : (string * child) list -> child
 val with_key : string -> child -> child
+
+(** The key and the child [with_key] made a child of, if it did. *)
+val entry : child -> (string * child) option
 (** Whether a compiled loop's rows are drawn from the item alone, or from the item and its index. *)
 type numbering = Items | Numbered
 
@@ -91,7 +94,7 @@ val rows :
   'frame template ->
   ('frame -> Dom.element[@u]) ->
   ('frame -> 'item -> unit[@u]) ->
-  ('item -> string[@u]) ->
+  ('item -> Reconcile.key[@u]) ->
   ('item -> int -> input array -> int -> unit[@u]) ->
   int ->
   input array ->
@@ -176,10 +179,15 @@ type medium = {
     'made array[@u]);
       (** Makes children in order; the last argument gives the node after one, from where it started. *)
   aside : ((unit -> live[@u]) -> live[@u]);  (** Children that live elsewhere, like a portal's. *)
+  adopt : 'frame. ('frame template -> ('frame -> unit[@u]) -> Template.position -> Dom.element * 'frame[@u]);
+      (** Takes the server's nodes of a template over, as its frame. *)
 }
 
 val browser : medium
 val medium : medium ref
+
+(** How the server's medium adopts a template: the server's root and a frame made over its nodes. *)
+val adopted : ('frame template -> ('frame -> unit[@u]) -> Template.position -> Dom.element * 'frame[@u])
 
 (** What hydration tells about the positions it adopts children at, item [index] of [count]: Melact
     counts them as React's [useId] does; by default nothing does. [join] leaves the last [fork]. *)
@@ -187,11 +195,20 @@ type positions = { fork : (int -> int -> unit[@u]); join : (unit -> unit[@u]) }
 
 val positions : positions ref
 
-(** In what order the patch under way reaches the children it patches: [Out_of_order] while a list
-    patches its items from the last one or picks the rows a selection changed. *)
-type order = In_document_order | Out_of_order
+(** In what order the patch under way reaches the children it patches. *)
+type order =
+  | In_document_order
+  | Out_of_order  (** A list moves its items or picks the rows a selection changed. *)
+  | Last_item_first  (** A list patches its items from the last one, each item's children in this order. *)
 
 val patch_order : order ref
+
+(** What a list that patches its items from the last one tells: [Opened] as it starts, [Next_item]
+    before an item it patches, [Closed] as it is done. *)
+type visit = Opened | Next_item | Closed
+
+(** Told of every [visit]; by default nothing listens. *)
+val item_visits : (visit -> unit[@u]) ref
 
 val backwards :
   int ->
@@ -242,10 +259,10 @@ val set_style : Hole.style -> (string * string) list -> unit
 val handler_hole : Dom.element -> string -> Hole.handler
 val set_handler : Hole.handler -> (Dom.event -> unit) -> unit
 val text_at : Template.position -> Dom.text
-val put_text : input -> Dom.text -> string -> unit
+val put_text : input -> Dom.text -> Dom_api.shown -> unit
 
-val write_sole_text : Dom.element -> string -> unit
-val put_sole_text : input -> Dom.element -> string -> unit
+val write_sole_text : Dom.element -> Dom_api.shown -> unit
+val put_sole_text : input -> Dom.element -> Dom_api.shown -> unit
 val write_attr : Dom.element -> string -> string option -> unit
 val put_attr : input -> Dom.element -> string -> string option -> unit
 

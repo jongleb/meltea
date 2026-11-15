@@ -682,18 +682,16 @@ let lowercase frontend ~loc ~attributes tag arguments =
         (fun (kept, same, effects, keys) (named, creator) ->
           match creator with
           | [%expr Melhole.Events.listen [%e? element] [%e? event]] ->
-              let registered =
+              let registered, key =
                 match event.pexp_desc with
                 | Pexp_constant (Pconst_string (name, _, _)) -> (
                     match Melhole_shared.Delegation.compiled name with
-                    | Delegated -> ignore (Hoist.hoist ~loc "delegated" [%expr Melhole.Events.delegate [%e event]]); effects
-                    | Crossing ->
-                        ignore (Hoist.hoist ~loc "delegated" [%expr Melhole.Events.delegate_crossing [%e event]]);
-                        effects
-                    | Direct -> [%expr Melhole.Events.listen [%e element] [%e event]] :: effects)
-                | _ -> [%expr Melhole.Events.listen [%e element] [%e event]] :: effects
+                    | Delegated -> (effects, [%expr Melhole.Events.delegate [%e event]])
+                    | Crossing -> (effects, [%expr Melhole.Events.delegate_crossing [%e event]])
+                    | Direct -> ([%expr Melhole.Events.listen [%e element] [%e event]] :: effects, [%expr Melhole.View.event_key [%e event]]))
+                | _ -> ([%expr Melhole.Events.listen [%e element] [%e event]] :: effects, [%expr Melhole.View.event_key [%e event]])
               in
-              (kept, same, registered, (named, Hoist.hoist ~loc "event" [%expr Melhole.View.event_key [%e event]]) :: keys)
+              (kept, same, registered, (named, Hoist.hoist ~loc ~unused:Hoist.Dropped "event" key) :: keys)
           | [%expr Melhole.Template.element [%e? _]] -> (
               let printed = Pprintast.string_of_expression creator in
               match
@@ -860,6 +858,12 @@ let lowercase frontend ~loc ~attributes tag arguments =
     find 0 variables
   in
   let sets =
+    let shown value =
+      match value with
+      | [%expr string_of_int ([%e? number] : int)] ->
+          ((fun written -> [%expr Melhole.Dom_api.shown_int [%e written]]), number)
+      | _ -> ((fun written -> [%expr Melhole.Dom_api.shown_string [%e written]]), value)
+    in
     List.mapi
       (fun index (guard, (hole : expression Markup.hole)) ->
         let hole_value = evar ~loc (hole_name index) in
@@ -886,9 +890,10 @@ let lowercase frontend ~loc ~attributes tag arguments =
                 (fun value -> [%expr Melhole.View.served_write_attr [%e hole_value] [%e estring ~loc name] [%e value]])
                 value
           | At_position (_, _, Text_slot, value), (Client_only | Server) ->
+              let shown, value = shown value in
               written
-                (fun last value -> [%expr Melhole.View.put_text [%e last] [%e hole_value] [%e value]])
-                (fun value -> [%expr Melhole.Dom_api.set_data [%e hole_value] [%e value]])
+                (fun last value -> [%expr Melhole.View.put_text [%e last] [%e hole_value] [%e shown value]])
+                (fun value -> [%expr Melhole.Dom_api.show [%e hole_value] [%e shown value]])
                 value
           | At_position (_, _, Text_slot, value), Hydratable ->
               written
@@ -896,9 +901,10 @@ let lowercase frontend ~loc ~attributes tag arguments =
                 (fun value -> [%expr Melhole.View.served_write_text [%e hole_value] [%e value]])
                 value
           | On_element (_, Sole_text, value), (Client_only | Server) ->
+              let shown, value = shown value in
               written
-                (fun last value -> [%expr Melhole.View.put_sole_text [%e last] [%e hole_value] [%e value]])
-                (fun value -> [%expr Melhole.View.write_sole_text [%e hole_value] [%e value]])
+                (fun last value -> [%expr Melhole.View.put_sole_text [%e last] [%e hole_value] [%e shown value]])
+                (fun value -> [%expr Melhole.View.write_sole_text [%e hole_value] [%e shown value]])
                 value
           | On_element (_, Sole_text, value), Hydratable ->
               written
@@ -929,7 +935,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
                       ]
                       None
                   in
-                  let site = Hoist.hoist ~loc "link" [%expr Melhole.View.link [%e body]] in
+                  let site = Hoist.hoist ~loc ~unused:Hoist.Dropped "link" [%expr Melhole.View.link [%e body]] in
                   [%expr Melhole.View.put_linked [%e hole_value] [%e key] [%e site] [%e evar ~loc dispatch] [%e carried]]
               | Linked _, Free.Volatile | Closures, _ -> [%expr Melhole.View.put_handler [%e hole_value] [%e key] [%e value]])
           | On_element (_, (Prop _ | Control _), value), (Client_only | Server) ->
@@ -953,10 +959,20 @@ let lowercase frontend ~loc ~attributes tag arguments =
               ppat_tuple ~loc
                 (List.map (fun _ -> [%pat? Melhole.View.Unchanged]) flags)
             in
+            let changed at =
+              ppat_tuple ~loc
+                (List.mapi (fun other _ -> if Int.equal at other then [%pat? Melhole.View.Changed] else [%pat? _]) flags)
+            in
             pexp_match ~loc (pexp_tuple ~loc flags)
               [
                 case ~lhs:unchanged ~guard:None ~rhs:[%expr ()];
-                case ~lhs:[%pat? _] ~guard:None ~rhs:set;
+                case
+                  ~lhs:
+                    (List.fold_left
+                       (fun alternatives at -> ppat_or ~loc alternatives (changed at))
+                       (changed 0)
+                       (List.init (List.length flags - 1) succ))
+                  ~guard:None ~rhs:set;
               ])
       (List.combine guards holes)
   in
@@ -1000,8 +1016,8 @@ let lowercase frontend ~loc ~attributes tag arguments =
   let instance =
   match (values, role) with
   | [], `Child ->
-      Hoist.hoist ~loc "element"
-        (frontend.wrap loc (Hoist.hoist ~loc "static" [%expr Melhole.View.static [%e markup]]))
+      Hoist.hoist ~loc ~unused:Hoist.Dropped "element"
+        (frontend.wrap loc (Hoist.hoist ~loc ~unused:Hoist.Dropped "static" [%expr Melhole.View.static [%e markup]]))
   | _, (`Row _ | `Child) ->
       let slot_names =
         List.concat
@@ -1193,7 +1209,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
            | false -> binary [%expr fun __melhole_node _ -> ([%e adopting] [@ocaml.warning "-26-27"])])
       in
       let template =
-        Hoist.hoist ~loc "template"
+        Hoist.hoist ~loc ~unused:Hoist.Dropped "template"
           (match !output with
           | Hydratable ->
               [%expr
@@ -1211,7 +1227,7 @@ let lowercase frontend ~loc ~attributes tag arguments =
       let refresh = unary [%expr fun __melhole_frame -> ([%e refreshing] [@ocaml.warning "-26-27"])] in
       match role with
       | `Row key ->
-          let root = Hoist.hoist ~loc "root" (unary [%expr fun __melhole_frame -> [%e read root_name]]) in
+          let root = Hoist.hoist ~loc ~unused:Hoist.Dropped "root" (unary [%expr fun __melhole_frame -> [%e read root_name]]) in
           [%expr Melhole.View.row [%e template] [%e root] [%e refresh] ([%e key] : string)]
       | `Child -> frontend.wrap loc [%expr Melhole.View.compiled [%e template] [%e refresh]]
   in
@@ -1362,7 +1378,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                     ((1 lsl List.length stable) - 1)
                     pieces
                 in
-                let selection = Hoist.hoist ~loc "selection" [%expr Melhole.View.selection [%e eint ~loc others]] in
+                let selection = Hoist.hoist ~loc ~unused:Hoist.Dropped "selection" [%expr Melhole.View.selection [%e eint ~loc others]] in
                 [%expr
                   Melhole.View.Selecting
                     ( [%e selection],
@@ -1449,6 +1465,12 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                     Option.map
                       (fun (pattern, rebuild, (template, root, parameters, refreshing, key)) ->
                         let given body = [%expr (let [%p pattern] = __melhole_item in [%e rebuild body]) [@ocaml.warning "-26-27"]] in
+                        let keyed =
+                          match key with
+                          | [%expr (string_of_int [%e? number] : string)] | [%expr string_of_int [%e? number]] ->
+                              [%expr Melhole.Reconcile.int_key [%e number]]
+                          | _ -> [%expr Melhole.Reconcile.string_key [%e key]]
+                        in
                         let refresh =
                           pexp_record ~loc
                             [
@@ -1462,7 +1484,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                         let loop =
                           [%expr
                             Melhole.View.rows [%e source] [%e listed] [%e template] [%e root] [%e refresh]
-                              [%e uncurried [%expr fun __melhole_item -> [%e given key]]]
+                              [%e uncurried [%expr fun __melhole_item -> [%e given keyed]]]
                               [%e project] [%e pieces] [%e outer] [%e selectors]]
                         in
                         match row.pexp_desc with
@@ -1477,7 +1499,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
           Some
             [%expr
               Melhole.View.each
-                [%e Hoist.hoist ~loc "site" [%expr Melhole.View.loop_site ()]]
+                [%e Hoist.hoist ~loc ~unused:Hoist.Dropped "site" [%expr Melhole.View.loop_site ()]]
                 [%e match numbering with Items -> [%expr Melhole.View.Items] | Numbered -> [%expr Melhole.View.Numbered]]
                 [%e source] [%e listed]
                 [%e

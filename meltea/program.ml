@@ -115,13 +115,14 @@ let launch course ~tracking ~mode ~view initial root =
           drawing := Cmd.View_transition;
           Cmd.drawing := Cmd.Instant
       | Cmd.Instant -> ());
-      pending := !pending lor tracking.changes message;
-      match (!schedule, !Events.pace) with
-      | Queued, _ | Framed, Continuous -> ()
-      | Idle, Continuous ->
+      let changes = tracking.changes message in
+      pending := !pending lor changes;
+      match (!schedule, !Events.pace, changes, !drawing) with
+      | Idle, _, 0, Cmd.Instant | Queued, _, _, _ | Framed, Continuous, _, _ -> ()
+      | Idle, Continuous, _, _ ->
           schedule := Framed;
           Dom_api.request_animation_frame (fun _ -> draw ())
-      | (Idle | Framed), Discrete ->
+      | (Idle | Framed), Discrete, _, _ ->
           schedule := Queued;
           queue_microtask draw);
   let halt () =

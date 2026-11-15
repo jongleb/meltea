@@ -4,12 +4,11 @@ synopsis:
   "The Elm architecture for Melange: pure functions, mlx views, compiled templates"
 description:
   "Meltea is the Elm architecture in OCaml: a model, messages, a pure update and a pure view written in mlx, compiled by meltea-ppx to DOM templates that re-render only what a message changed."
-maintainer: ["Gleb <jongleber@gmail.com>"]
-authors: ["Gleb <jongleber@gmail.com>"]
+maintainer: ["Gleb"]
+authors: ["Gleb"]
 license: "MIT"
-homepage: "https://jongleb.github.io/melact-meltea-sites/melact/"
-doc: "https://github.com/jongleb/melact#readme"
-bug-reports: "https://github.com/jongleb/melact/issues"
+homepage: "https://github.com/jongleb/meltea"
+bug-reports: "https://github.com/jongleb/meltea/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.16" & >= "3.16"}
@@ -34,4 +33,4 @@ build: [
     "@doc" {with-doc}
   ]
 ]
-dev-repo: "git+https://github.com/jongleb/melact.git"
+dev-repo: "git+https://github.com/jongleb/meltea.git"

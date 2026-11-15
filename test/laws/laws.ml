@@ -107,33 +107,33 @@ let edited_input =
 let reconcile_laws (kind, input) =
   [
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "one step per new entry") ~print:print_keys input
-      (fun (old, next) -> Array.length (Reconcile.plan ~old ~next).steps = Array.length next);
+      (fun (old, next) -> Array.length (Reconcile.plan ~old:(Reconcile.string_keys old) ~next:(Reconcile.string_keys next)).steps = Array.length next);
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "reused and dropped entries partition the old ones")
       ~print:print_keys input (fun (old, next) ->
-        let plan = Reconcile.plan ~old ~next in
+        let plan = Reconcile.plan ~old:(Reconcile.string_keys old) ~next:(Reconcile.string_keys next) in
         List.sort compare (List.map snd (reused plan) @ Array.to_list plan.dropped)
         = List.init (Array.length old) Fun.id);
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "a reused entry has the same key") ~print:print_keys
       input (fun (old, next) ->
         List.for_all
           (fun (j, i) -> String.equal old.(i) next.(j))
-          (reused (Reconcile.plan ~old ~next)));
+          (reused (Reconcile.plan ~old:(Reconcile.string_keys old) ~next:(Reconcile.string_keys next))));
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "reuse is maximal, the sum over keys of min(old, new) counts")
       ~print:print_keys input (fun (old, next) ->
         let keys = List.sort_uniq compare (Array.to_list old @ Array.to_list next) in
-        List.length (reused (Reconcile.plan ~old ~next))
+        List.length (reused (Reconcile.plan ~old:(Reconcile.string_keys old) ~next:(Reconcile.string_keys next)))
         = List.fold_left (fun total key -> total + min (count key old) (count key next)) 0 keys);
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "kept entries appear in increasing old order") ~print:print_keys
       input (fun (old, next) ->
         let kept =
           List.concat_map
             (fun (step : Reconcile.step) -> match Reconcile.view step with Keep i -> [ i ] | Move _ | Create -> [])
-            (Array.to_list (Reconcile.plan ~old ~next).steps)
+            (Array.to_list (Reconcile.plan ~old:(Reconcile.string_keys old) ~next:(Reconcile.string_keys next)).steps)
         in
         kept = List.sort_uniq compare kept);
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "kept entries are a longest increasing subsequence (moves are minimal)")
       ~print:print_keys input (fun (old, next) ->
-        let plan = Reconcile.plan ~old ~next in
+        let plan = Reconcile.plan ~old:(Reconcile.string_keys old) ~next:(Reconcile.string_keys next) in
         let kept =
           Array.fold_left
             (fun total (step : Reconcile.step) ->
@@ -143,7 +143,7 @@ let reconcile_laws (kind, input) =
         kept = longest_increasing (List.map snd (reused plan)));
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "executing the plan right to left yields exactly the new sequence")
       ~print:print_keys input (fun (old, next) ->
-        let plan = Reconcile.plan ~old ~next in
+        let plan = Reconcile.plan ~old:(Reconcile.string_keys old) ~next:(Reconcile.string_keys next) in
         simulate old next plan
         = Array.to_list
             (Array.mapi
@@ -152,7 +152,7 @@ let reconcile_laws (kind, input) =
                plan.steps));
     Test.make ~count:2000 ~name:("Reconcile, " ^ kind ^ ": " ^ "an unchanged sequence keeps every entry in place")
       ~print:print_keys input (fun (keys, _) ->
-        let plan = Reconcile.plan ~old:keys ~next:keys in
+        let plan = Reconcile.plan ~old:(Reconcile.string_keys keys) ~next:(Reconcile.string_keys keys) in
         plan.dropped = [||]
         && Array.for_all2
              (fun (step : Reconcile.step) i -> Reconcile.view step = Keep i)
@@ -488,6 +488,33 @@ let dom_props_laws =
           all);
   ]
 
+let hook_name_laws =
+  let name =
+    Gen.(
+      map2 ( ^ )
+        (oneof_list [ "use"; "use"; "us"; "user"; "Use"; "used"; "" ])
+        (string_size ~gen:(oneof_list [ 'a'; 'z'; 'A'; 'Z'; '_'; '\''; '0'; '7'; 'x' ]) (int_bound 5)))
+  in
+  [
+    Test.make ~count:3000 ~name:"Hook_name: a name is a hook exactly when it is use, or use then no lowercase letter"
+      ~print:Print.string name (fun name ->
+        let expected =
+          String.equal name "use"
+          || String.length name > 3
+             && String.equal (String.sub name 0 3) "use"
+             && not (name.[3] >= 'a' && name.[3] <= 'z')
+        in
+        match Melhole_compiler.Hook_name.of_name name with Hook _ -> expected | Plain -> not expected);
+    Test.make ~count:3000 ~name:"Hook_name: a hook's base and dependencies spell its name, the dependencies all digits"
+      ~print:Print.string name (fun name ->
+        match Melhole_compiler.Hook_name.of_name name with
+        | Plain -> true
+        | Hook { base; dependencies } ->
+            let digit character = character >= '0' && character <= '9' in
+            String.equal (base ^ dependencies) name
+            && String.for_all digit dependencies
+            && (String.equal base "" || not (digit base.[String.length base - 1])));
+  ]
 
 (** What one handler of a generated view does. *)
 type sends =
@@ -804,5 +831,149 @@ let lattice_laws =
       ~count:1000 ~print:lattice_source lattice_program (fun program -> lattice_found program = Some (lattice_expected program));
   ]
 
+(** What a branch of a generated [update] does. *)
+type branch =
+  | Leaves  (** [(model, Cmd.none)]. *)
+  | Writes  (** Changes a field. *)
+  | Commands of int  (** Leaves the model and sends the message through a command. *)
+  | Chooses of bool * bool  (** A [match] on a field whose two arms leave the model ([true]) or write it. *)
+
+(** A generated module for the dead-code alerts: cases of [update] (the messages each takes, or
+    every remaining one, and its branch), messages [init] sends and the messages each handler
+    sends. *)
+type dead_program = {
+  messages : int;
+  cases : (int list option * branch) list;
+  started : int list;
+  clicks : int list list;
+}
+
+let dead_program =
+  let open Gen in
+  let* messages = int_range 2 5 in
+  let message = int_bound (messages - 1) in
+  let branch =
+    oneof
+      [ pure Leaves; pure Writes; map (fun sent -> Commands sent) message; map2 (fun first second -> Chooses (first, second)) bool bool ]
+  in
+  let* order = shuffle_list (List.init messages Fun.id) in
+  let* sizes = list_size (pure messages) (int_range 1 2) in
+  let rec grouped order sizes =
+    match (order, sizes) with
+    | [], _ | _, [] -> []
+    | _, size :: sizes ->
+        let taken = List.filteri (fun index _ -> index < size) order in
+        taken :: grouped (List.filteri (fun index _ -> index >= size) order) sizes
+  in
+  let groups = grouped order sizes in
+  let* rest = int_range 1 (List.length groups) in
+  let* catch_all = bool in
+  let groups = match catch_all with true -> List.filteri (fun index _ -> index < rest) groups | false -> groups in
+  let* named = list_size (pure (List.length groups)) branch in
+  let* last = branch in
+  let cases = List.map2 (fun group branch -> (Some group, branch)) groups named @ match catch_all with true -> [ (None, last) ] | false -> [] in
+  let* started = list_size (int_bound 1) message in
+  let* clicks = list_size (int_bound 4) (list_size (int_range 1 2) message) in
+  pure { messages; cases; started; clicks }
+
+let dead_source program =
+  let constructor index = Printf.sprintf "M%d" index in
+  let arm branch =
+    match branch with
+    | Leaves -> "(model, Cmd.none)"
+    | Writes -> "({ model with f = 1 }, Cmd.none)"
+    | Commands sent -> Printf.sprintf "(model, Cmd.after 1 %s)" (constructor sent)
+    | Chooses (first, second) ->
+        let side leaves = match leaves with true -> "(model, Cmd.none)" | false -> "({ model with f = 2 }, Cmd.none)" in
+        Printf.sprintf "(match model.f with 0 -> %s | _ -> %s)" (side first) (side second)
+  in
+  let lines =
+    [ "type message =" ]
+    @ List.init program.messages (fun index -> "  | " ^ constructor index)
+    @ [
+        Printf.sprintf "let init = ({ f = 0 }, %s)"
+          (match program.started with [] -> "Cmd.none" | sent :: _ -> "Cmd.after 1 " ^ constructor sent);
+        "let update message model =";
+        "  match message with";
+      ]
+    @ List.map
+        (fun (taken, branch) ->
+          Printf.sprintf "  | %s -> %s"
+            (Option.fold ~none:"_" ~some:(fun taken -> String.concat " | " (List.map constructor taken)) taken)
+            (arm branch))
+        program.cases
+    @ [ "let view model =";
+        "  ((div ~children:[" ]
+    @ List.map
+        (fun sent ->
+          match sent with
+          | [ only ] -> Printf.sprintf "    ((button ~onClick:%s ()) [@JSX]);" (constructor only)
+          | first :: second :: _ ->
+              Printf.sprintf "    ((input ~onKeyDown:(fun key -> match key with \"Enter\" -> %s | _ -> %s) ()) [@JSX]);"
+                (constructor first) (constructor second)
+          | [] -> "")
+        program.clicks
+    @ [ "  ] ()) [@JSX])" ]
+  in
+  String.concat "\n" lines
+
+let dead_expected program =
+  let taking message = List.find_opt (fun (taken, _) -> Option.fold ~none:true ~some:(List.mem message) taken) program.cases in
+  let sent message =
+    List.mem message program.started
+    || List.exists (List.mem message) program.clicks
+    || List.exists
+         (fun (taken, branch) ->
+           match branch with
+           | Commands target -> target = message && not (Option.fold ~none:false ~some:(List.mem message) taken)
+           | Leaves | Writes | Chooses _ -> false)
+         program.cases
+  in
+  let inert message =
+    match taking message with
+    | Some (_, Leaves) | Some (_, Chooses (true, true)) -> true
+    | Some (_, (Writes | Commands _ | Chooses _)) | None -> false
+  in
+  let first_handler = program.messages + 7 + List.length program.cases in
+  List.sort compare
+    (List.filter_map
+       (fun message -> match sent message with true -> None | false -> Some ("dead_message", 2 + message))
+       (List.init program.messages Fun.id)
+    @ List.filter_map Fun.id
+        (List.mapi
+           (fun index sends ->
+             match List.for_all inert sends with true -> Some ("dead_handler", first_handler + index) | false -> None)
+           program.clicks))
+
+let dead_alerted program =
+  let items = Ppxlib.Parse.implementation (Lexing.from_string (dead_source program)) in
+  let found =
+    object
+      inherit [(string * int) list] Ppxlib.Ast_traverse.fold as super
+
+      method! expression expression alerts =
+        match expression.pexp_desc with
+        | Pexp_letmodule
+            ( { txt = Some "Melhole_dead"; _ },
+              { pmod_desc = Pmod_constraint (_, { pmty_desc = Pmty_signature [ { psig_desc = Psig_value here; _ } ]; _ }); _ },
+              reference ) ->
+            List.fold_left
+              (fun alerts (attribute : Ppxlib.attribute) ->
+                match attribute.attr_payload with
+                | PStr [ { pstr_desc = Pstr_eval ({ pexp_desc = Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident kind; _ }; _ }, _); _ }, _); _ } ] ->
+                    (kind, reference.pexp_loc.loc_start.pos_lnum) :: alerts
+                | _ -> alerts)
+              alerts here.pval_attributes
+        | _ -> super#expression expression alerts
+    end
+  in
+  List.sort compare (found#structure (Meltea_ppx.Dead.annotate items) [])
+
+let dead_laws =
+  [
+    Test.make ~name:"Dead code: alerts stand at exactly the messages nothing sends and the handlers whose messages do nothing"
+      ~count:1000 ~print:dead_source dead_program (fun program -> dead_alerted program = dead_expected program);
+  ]
+
 let () =
-  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ dom_props_laws @ fanout_laws @ shell_laws @ lattice_laws))
+  exit (QCheck_base_runner.run_tests ~verbose:true (reconcile_laws ("random pairs", reconcile_input) @ reconcile_laws ("edits", edited_input) @ markup_laws @ hook_name_laws @ dom_props_laws @ fanout_laws @ shell_laws @ lattice_laws @ dead_laws))

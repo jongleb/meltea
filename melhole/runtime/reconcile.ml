@@ -1,3 +1,12 @@
+(** A string, hashed by its letters, or an int, which has none and is hashed as itself. *)
+type key
+
+external string_key : string -> key = "%identity"
+external int_key : int -> key = "%identity"
+external string_keys : string array -> key array = "%identity"
+external spelled : key -> string = "%identity"
+external numbered : key -> int = "%identity"
+
 type step = int
 
 type view = Keep of int | Move of int | Create
@@ -16,7 +25,7 @@ type t = { steps : step array; dropped : int array }
 let plan ~old ~next =
   let old_length = Array.length old and next_length = Array.length next in
   let steps = Array.make next_length create in
-  let same i j = String.equal (Array.unsafe_get old i) (Array.unsafe_get next j) in
+  let same i j = String.equal (spelled (Array.unsafe_get old i)) (spelled (Array.unsafe_get next j)) in
   let rec narrow old_start old_stop next_start next_stop =
     match (old_start < old_stop && next_start < next_stop) with
     | false -> (old_start, old_stop, next_start, next_stop)
@@ -49,8 +58,11 @@ let plan ~old ~next =
       let size = capacity 8 in
       let table = Array.make size (-1) and claimed = Array.make old_length 0 in
       let slot key =
-        let code = ref 0 in
-        String.iter (fun letter -> code := ((!code * 31) + Char.code letter) land 0x3FFFFFFF) key;
+        let code = ref (match Js.typeof key with "number" -> numbered key | _ -> 0) in
+        let spelling = spelled key in
+        for at = 0 to String.length spelling - 1 do
+          code := ((!code * 31) + Char.code (String.unsafe_get spelling at)) land 0x3FFFFFFF
+        done;
         !code land (size - 1)
       in
       for i = old_start to old_stop - 1 do
@@ -63,7 +75,7 @@ let plan ~old ~next =
         let i = Array.unsafe_get table at in
         if i < 0 then None
         else
-          match (String.equal (Array.unsafe_get old i) key, Array.unsafe_get claimed i) with
+          match (String.equal (spelled (Array.unsafe_get old i)) (spelled key), Array.unsafe_get claimed i) with
           | true, 0 ->
               Array.unsafe_set claimed i 1;
               Some i

@@ -1,6 +1,6 @@
 let separator = " "
 
-let rec following : View.medium =
+let following : View.medium =
   {
     adoption = Server_nodes;
     text =
@@ -25,7 +25,7 @@ let rec following : View.medium =
         match Js.Null.toOption position.before with
         | Some found when Dom_api.node_type found = 1 && String.equal (Dom_api.node_name found) (Template.tag markup) ->
             Dom_api.unsafe_element found
-        | Some _ | None -> View.expected ("<" ^ String.lowercase_ascii (Template.tag markup) ^ ">") position.before);
+        | Some _ | None -> View.expected ("<" ^ Dom_api.lowercase (Template.tag markup) ^ ">") position.before);
     placed = (fun [@u] _ _ -> ());
     opened = (fun [@u] _ -> View.Settled);
     built =
@@ -50,10 +50,12 @@ let rec following : View.medium =
             made);
     aside =
       (fun [@u] build ->
+        let serving = !View.medium in
         View.medium := View.browser;
         let live = build () [@u] in
-        View.medium := following;
+        View.medium := serving;
         live);
+    adopt = View.adopted;
   }
 
 let render child =
@@ -147,8 +149,8 @@ let resumable child ~taken ~parent =
       page
   | None ->
       let inputs = [ "click"; "dblclick"; "input"; "change"; "keydown"; "keyup"; "submit"; "pointerdown" ] in
-      let rec page = { child; taken; parent; state = Waiting disarm }
-      and listener native =
+      let page = { child; taken; parent; state = Left } in
+      let rec listener native =
         Option.iter
           (fun target ->
             match contains parent target with
@@ -156,6 +158,7 @@ let resumable child ~taken ~parent =
             | false -> ())
           (Dom_api.target native)
       and disarm () = List.iter (fun input -> remove_window_listener input listener [%mel.obj { capture = true }]) inputs in
+      page.state <- Waiting disarm;
       List.iter (fun input -> add_window_listener input listener [%mel.obj { capture = true }]) inputs;
       page
 

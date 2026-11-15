@@ -39,7 +39,7 @@ let remembered ~model ~locals binding =
       (match whole @ fields @ List.map (evar ~loc) named with
       | [] -> binding
       | inputs ->
-          let memory = Melhole_compiler.Hoist.hoist ~loc "memory" [%expr Melhole.View.memory ()] in
+          let memory = Melhole_compiler.Hoist.hoist ~loc ~unused:Melhole_compiler.Hoist.Kept "memory" [%expr Melhole.View.memory ()] in
           {
             binding with
             pvb_expr =

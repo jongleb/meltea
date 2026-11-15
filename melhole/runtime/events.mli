@@ -19,14 +19,14 @@ val key_of : string -> string
     bubbles, on the element otherwise. *)
 val register : Dom.element -> string -> registration
 
-(** Listens at the document for a delegated event, once per event type; compiled templates call it
-    once, not per element. *)
-val delegate : string -> unit
+(** Listens at the document for a delegated event, once per event type, and gives the property an
+    element keeps its handler for it under; compiled templates call it once, not per element. *)
+val delegate : string -> string
 
 (** Listens once on [document] for an element being entered or left ([mouseenter], [mouseleave],
     [pointerenter], [pointerleave]); compiled templates call it, so an app without such handlers
-    carries none of it. *)
-val delegate_crossing : string -> unit
+    carries none of it; gives the property an element keeps its handler for it under. *)
+val delegate_crossing : string -> string
 
 (** Records what an input or textarea shows now, its value or checked state, as React's value
     tracker does: [onchange], React's [onChange] on those, delivers an [input] or [change] event only
@@ -36,6 +36,17 @@ val track : Dom.element -> unit
 (** Runs after the handlers of an [input] or [change] event on a controlled field, before its value
     is put back: Melact renders there at once, as React does with [flushSync] for controlled inputs. *)
 val after_controlled : (unit -> unit) ref
+
+(** [segment event slot]: runs the delegated handlers for [event] from where the last segment
+    stopped, or its target, up to [slot], which they do not reach, and makes the document's walk
+    start at [slot]; an island of real React calls it from a slot's React handler, so that Melact's
+    handlers between islands run inside React's propagation. *)
+val segment : Dom.event -> Dom.node -> unit
+
+(** [resume_at event node]: makes the document's walk start at [node]; an island of real React calls
+    it as React's propagation leaves the island, so that the walk goes on from the island's place in
+    Melact's tree, wherever the island's content was portaled. *)
+val resume_at : Dom.event -> Dom.node -> unit
 
 val listen : Dom.element -> string -> unit
 

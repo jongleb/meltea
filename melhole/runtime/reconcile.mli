@@ -1,5 +1,14 @@
 (** How to turn an old keyed sequence into a new one with few DOM moves. *)
 
+(** A row's key: a string, or an int kept as it is, so that JavaScript makes no string of it and
+    fills no cache of number strings. Keys are the same when they are [===]; the keys of one loop
+    are all of one kind. *)
+type key
+
+external string_key : string -> key = "%identity"
+external int_key : int -> key = "%identity"
+external string_keys : string array -> key array = "%identity"
+
 (** What happens to one entry of the new sequence; an int inside, so that a plan allocates nothing
     per entry. *)
 type step
@@ -23,4 +32,4 @@ type t = {
   dropped : int array;  (** Old entries that are not reused, in order. *)
 }
 
-val plan : old:string array -> next:string array -> t
+val plan : old:key array -> next:key array -> t

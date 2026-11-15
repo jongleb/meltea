@@ -346,7 +346,7 @@ let split t binding =
               items inner
           in
           let slice =
-            Melhole_compiler.Hoist.hoist ~loc "slice"
+            Melhole_compiler.Hoist.hoist ~loc ~unused:Melhole_compiler.Hoist.Kept "slice"
               [%expr
                 (fun __melhole_changed -> [%e pexp_function ~loc [ parameter ] constraint_ (Pfunction_body (kept Needed tail))])
                 [@ocaml.warning "-26-27"]]

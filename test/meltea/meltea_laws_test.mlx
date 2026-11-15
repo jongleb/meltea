@@ -608,6 +608,36 @@ let () =
            Program.stop program;
            Program.stop expected))
         [%mel.obj { numRuns = 300 }]);
+    test "a message whose branch changes no field queues no draw, and the page is the view of fold update init messages" (fun () ->
+      let counting : unit -> unit =
+        [%mel.raw
+          {|function () { var real = globalThis.queueMicrotask; globalThis.__queued = 0; globalThis.__real = real; globalThis.queueMicrotask = function (f) { globalThis.__queued++; real(f); }; }|}]
+      in
+      let queued : unit -> int = [%mel.raw {|function () { return globalThis.__queued; }|}] in
+      let restore : unit -> unit = [%mel.raw {|function () { globalThis.queueMicrotask = globalThis.__real; }|}] in
+      check
+        (property (tapes ~shortest:20 ~longest:120) (fun values ->
+           let steps = steps (tape values) in
+           let root = create_element document "div" and fresh = create_element document "div" in
+           let program = Program.sandbox ~init ~update ~view root in
+           counting ();
+           let expected, _ =
+             List.fold_left
+               (fun (queued, schedule) step ->
+                 match (step, schedule) with
+                 | Send Same, _ | Send _, `Queued -> (queued, schedule)
+                 | Send _, `Idle -> (queued + 1, `Queued)
+                 | Flush, _ -> (queued, `Idle))
+               (0, `Idle) steps
+           in
+           run program steps;
+           let made = queued () in
+           restore ();
+           let shown = Program.sandbox ~init:(final steps) ~update ~view fresh in
+           expect (made, snapshot root) |. to_equal (expected, snapshot fresh);
+           Program.stop program;
+           Program.stop shown))
+        [%mel.obj { numRuns = 300 }]);
     test "a message that keeps the model, and a flush with nothing pending, write nothing" (fun () ->
       check
         (property (tapes ~shortest:20 ~longest:120) (fun values ->

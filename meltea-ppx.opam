@@ -3,12 +3,11 @@ opam-version: "2.0"
 synopsis: "Meltea's mlx views with messages, compiled to templates"
 description:
   "meltea-ppx compiles Meltea's mlx views to melhole templates, reads update and view for the model fields each message changes, and can write a view's HTML natively for server rendering."
-maintainer: ["Gleb <jongleber@gmail.com>"]
-authors: ["Gleb <jongleber@gmail.com>"]
+maintainer: ["Gleb"]
+authors: ["Gleb"]
 license: "MIT"
-homepage: "https://jongleb.github.io/melact-meltea-sites/melact/"
-doc: "https://github.com/jongleb/melact#readme"
-bug-reports: "https://github.com/jongleb/melact/issues"
+homepage: "https://github.com/jongleb/meltea"
+bug-reports: "https://github.com/jongleb/meltea/issues"
 depends: [
   "ocaml" {>= "5.4"}
   "dune" {>= "3.16" & >= "3.16"}
@@ -31,4 +30,4 @@ build: [
     "@doc" {with-doc}
   ]
 ]
-dev-repo: "git+https://github.com/jongleb/melact.git"
+dev-repo: "git+https://github.com/jongleb/meltea.git"
