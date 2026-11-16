@@ -1,4 +1,5 @@
 open Melhole
+open Meltea_runtime
 
 external queue_microtask : (unit -> unit) -> unit = "queueMicrotask"
 

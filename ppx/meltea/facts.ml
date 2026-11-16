@@ -299,7 +299,7 @@ let structure file structure =
         (fun self expression ->
           (match expression.exp_desc with
           | Texp_apply ({ exp_desc = Texp_ident (path, _, _); _ }, (Nolabel, Arg source) :: _)
-            when List.mem (Ocaml_common.Path.name path) [ "Melhole.View.rows"; "Melhole__View.rows" ] ->
+            when List.mem (Ocaml_common.Path.name path) [ "Meltea_runtime.View.rows"; "Meltea_runtime__View.rows" ] ->
               loops := (expression.exp_loc, source) :: !loops
           | Texp_apply ({ exp_desc = Texp_ident (Pident callee, _, _); _ }, arguments) -> calls := (callee, arguments) :: !calls
           | _ -> ());
@@ -507,7 +507,7 @@ let structure file structure =
         let loc = expression.pexp_loc in
         let expression =
           match (expression.pexp_desc, Hashtbl.mem unscanned loc) with
-          | Pexp_apply (({ pexp_desc = Pexp_ident { txt = Ldot (Ldot (Lident "Melhole", "View"), "rows"); _ }; _ } as callee), arguments), true ->
+          | Pexp_apply (({ pexp_desc = Pexp_ident { txt = Ldot (Ldot (Lident "Meltea_runtime", "View"), "rows"); _ }; _ } as callee), arguments), true ->
               {
                 expression with
                 pexp_desc =
@@ -516,26 +516,26 @@ let structure file structure =
                       List.map
                         (fun (label, (argument : expression)) ->
                           match argument.pexp_desc with
-                          | Pexp_ident { txt = Ldot (Ldot (Lident "Melhole", "View"), "scans"); loc } ->
-                              (label, { argument with pexp_desc = Pexp_ident { txt = Ldot (Ldot (Lident "Melhole", "View"), "unscanned"); loc } })
+                          | Pexp_ident { txt = Ldot (Ldot (Lident "Meltea_runtime", "View"), "scans"); loc } ->
+                              (label, { argument with pexp_desc = Pexp_ident { txt = Ldot (Ldot (Lident "Meltea_runtime", "View"), "unscanned"); loc } })
                           | _ -> (label, argument))
                         arguments );
               }
           | _ -> expression
         in
-        let recorded kind before after = [%expr Melhole_meltea.Delta.record [%e kind] [%e before] [%e after]] in
+        let recorded kind before after = [%expr Meltea_runtime.Delta.record [%e kind] [%e before] [%e after]] in
         match (Hashtbl.find_opt sites loc, expression.pexp_desc) with
         | Some (Made { before; made }), Pexp_apply _ ->
             let at place = source place expression in
             let kind =
               match made with
-              | Appended -> Some [%expr Melhole_meltea.Delta.appended]
+              | Appended -> Some [%expr Meltea_runtime.Delta.appended]
               | Cut (until, from) ->
-                  Option.bind (at until) (fun until -> Option.map (fun from -> [%expr Melhole_meltea.Delta.cut [%e until] [%e from]]) (at from))
-              | Point (Constant place) -> Some [%expr Melhole_meltea.Delta.rewritten [| [%e Ast_builder.Default.eint ~loc place] |]]
-              | Point (Source place) -> Option.map (fun place -> [%expr Melhole_meltea.Delta.rewritten [| [%e place] |]]) (at place)
+                  Option.bind (at until) (fun until -> Option.map (fun from -> [%expr Meltea_runtime.Delta.cut [%e until] [%e from]]) (at from))
+              | Point (Constant place) -> Some [%expr Meltea_runtime.Delta.rewritten [| [%e Ast_builder.Default.eint ~loc place] |]]
+              | Point (Source place) -> Option.map (fun place -> [%expr Meltea_runtime.Delta.rewritten [| [%e place] |]]) (at place)
               | Strided (step, from) ->
-                  Some [%expr Melhole_meltea.Delta.strided [%e Ast_builder.Default.eint ~loc step] [%e Ast_builder.Default.eint ~loc from]]
+                  Some [%expr Meltea_runtime.Delta.strided [%e Ast_builder.Default.eint ~loc step] [%e Ast_builder.Default.eint ~loc from]]
             in
             Option.value ~default:expression
               (Option.bind kind (fun kind -> Option.map (fun before -> recorded kind before expression) (at before)))
@@ -544,10 +544,10 @@ let structure file structure =
             let kind =
               match written with
               | Exchanged (first, second) ->
-                  Option.bind (at first) (fun first -> Option.map (fun second -> [%expr Melhole_meltea.Delta.exchanged [%e first] [%e second]]) (at second))
+                  Option.bind (at first) (fun first -> Option.map (fun second -> [%expr Meltea_runtime.Delta.exchanged [%e first] [%e second]]) (at second))
               | Rewritten places ->
                   Option.map
-                    (fun places -> [%expr Melhole_meltea.Delta.rewritten [%e Ast_builder.Default.pexp_array ~loc places]])
+                    (fun places -> [%expr Meltea_runtime.Delta.rewritten [%e Ast_builder.Default.pexp_array ~loc places]])
                     (List.fold_right (fun place found -> Option.bind found (fun rest -> Option.map (fun place -> place :: rest) (at place))) places (Some []))
             in
             let rec inserted count (body : expression) note =

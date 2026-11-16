@@ -1,4 +1,4 @@
-open Melhole
+open Meltea_runtime
 
 type 'msg t = ('msg -> unit) -> View.child
 
@@ -34,4 +34,4 @@ let key event = event_key event
 let prevent_default event = prevent event
 
 let chunks ?(size = 100) ?(row_height = 40) ?(tag = "div") views dispatch =
-  Melhole.View.chunks ~size ~row_height ~tag (Melhole.View.list (List.map (fun view -> view dispatch) views))
+  View.chunks ~size ~row_height ~tag (View.list (List.map (fun view -> view dispatch) views))

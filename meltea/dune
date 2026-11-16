@@ -3,6 +3,6 @@
  (public_name meltea)
  (wrapped false)
  (modes melange)
- (libraries melhole melhole.meltea melange.dom)
+ (libraries melhole meltea.runtime melange.dom)
  (preprocess
   (pps melange.ppx)))

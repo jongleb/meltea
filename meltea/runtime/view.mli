@@ -1,0 +1,315 @@
+(** Descriptions of DOM content, and the patcher that turns
+    the mounted description into the next one by writing only what changed.
+    Values are compared physically: mutating data in place is invisible. *)
+
+type child
+
+(** A prop value of any type, compared physically to decide whether a component re-renders. *)
+type input = Input : 'a -> input [@@unboxed]
+
+val text : string -> child
+val empty : child
+val list : child list -> child
+val keyed : (string * child) list -> child
+val with_key : string -> child -> child
+
+(** The key and the child [with_key] made a child of, if it did. *)
+val entry : child -> (string * child) option
+(** Whether a compiled loop's rows are drawn from the item alone, or from the item and its index. *)
+type numbering = Items | Numbered
+
+(** How a selector compares the key it chose with a row's: OCaml's [=] or [==]. *)
+type equality = Structural | Physical
+
+(** A compiled loop site that has selectors, made once per site. *)
+type selection
+
+(** [selection others]: the bits of [others] are the outer inputs that the pieces other than selectors read. *)
+val selection : int -> selection
+
+(** A projected piece of a loop's row that is one value in the rows whose key is the one the outer
+    values chose, and another in the rest. *)
+type 'item selector
+
+(** [selector equality chosen key]: [chosen] is the key the outer values choose, if any; [key] gives a
+    row's key from its item and index. *)
+val selector : equality -> 'key option -> ('item -> int -> 'key[@u]) -> 'item selector
+
+(** The selectors of one render of a compiled loop, in the order of the pieces they are. When only
+    inputs that selectors alone read change and the items stay, a loop draws again only the rows
+    whose key a selector chose before or chooses now, looked up in an index of the rows by key. *)
+type 'item selectors = Unselecting | Selecting of selection * 'item selector array
+
+(** A compiled loop: [project item index out at] writes the [pieces] values of a row's rendering that read
+    [outer] into [out] from [at], so that a change of [outer] re-renders only the rows they differ in
+    and allocates nothing per row; a [Numbered] row is drawn again when its index changes. *)
+(** One loop in the generated code, made once per loop site: a loop patches only the rows its own site drew. *)
+type loop_site
+
+val loop_site : unit -> loop_site
+
+val each :
+  loop_site ->
+  numbering ->
+  'source ->
+  ('source -> 'item array) ->
+  ('item -> int -> child[@u]) ->
+  ('item -> int -> input array -> int -> unit[@u]) ->
+  int ->
+  input array ->
+  'item selectors ->
+  child
+
+(** What a compiled template's frame needs at the moments only the runtime sees; [None] for nothing. *)
+type 'frame duties = {
+  placed : ('frame -> unit[@u]) option;  (** Once its root is in the document: refs get the element. *)
+  released : ('frame -> unit[@u]) option;  (** When it goes: content released, listeners and refs let go. *)
+  forgotten : ('frame -> unit[@u]) option;  (** After a render that threw halfway: every hole is written again. *)
+}
+
+(** A compiled template: its markup and how to make the frame of a fresh clone, the one record
+    that holds a mounted clone's holes and the values its refresh last read. *)
+type 'frame template
+
+(** A compiled loop whose rows are one element each: one template, the root of a row's frame, one
+    refresh taking the item, and the key of an item, shared by all rows; a row costs its nodes and
+    its frame. *)
+(** The items of a loop over an array: the array itself. *)
+val arrayed : 'item array -> 'item array
+
+(** How a compiled row loop's items changed, as one of its ways to patch: rows removed from the
+    first index to before the second; items inserted there; rows that changed places with their
+    keys, where they came from, and the places whose items alone changed; or every row in its place
+    and only the items at these places new. *)
+type arrangement =
+  [ `Removed of int * int | `Inserted of int * int | `Shuffled of (int * Melhole.Reconcile.key) array * int array * int list | `In_place of int list ]
+
+(** What a compiled row loop asks of the facts recorded about its items: [hint before after items
+    old_items old_keys key], with the sources it showed and is given; [None] when none is known. *)
+type hinting = {
+  hint :
+    'item.
+    (input -> input -> 'item array -> 'item array -> Melhole.Reconcile.key array -> ('item -> Melhole.Reconcile.key[@u]) -> arrangement option[@u]);
+}
+
+(** How loops learn facts: knowing none, until code that records them is linked. *)
+val hinting : hinting ref
+
+(** How a compiled row loop finds out how its items changed when no fact tells it: [scans] compares
+    them with the items it shows (a block inserted or removed, rows moved, items renewed in place);
+    [unscanned] goes straight to matching rows by key, which is right for every change, and links none
+    of the scans. Meltea's typed pass passes [unscanned] to a loop whose items change only in ways
+    that facts record or that make them anew. *)
+type 'item scanning
+
+val scans : 'item scanning
+val unscanned : 'item scanning
+
+val rows :
+  'source ->
+  ('source -> 'item array) ->
+  'frame template ->
+  ('frame -> Dom.element[@u]) ->
+  ('frame -> 'item -> unit[@u]) ->
+  ('item -> Melhole.Reconcile.key[@u]) ->
+  'item scanning ->
+  ('item -> int -> input array -> int -> unit[@u]) ->
+  int ->
+  input array ->
+  'item selectors ->
+  child
+
+val memo : input array -> (unit -> child) -> child
+
+(** Whether a value differs from the one a scope remembers for it. *)
+type change = Changed | Unchanged
+
+val template : Melhole.Template.t -> (Dom.node -> 'frame[@u]) -> 'frame duties -> 'frame template
+
+val hydratable :
+  Melhole.Template.t ->
+  (Dom.node -> 'frame[@u]) ->
+  'frame duties ->
+  (Dom.node -> (unit -> 'frame) -> 'frame[@u]) ->
+  'frame template
+
+val compiled : 'frame template -> ('frame -> unit[@u]) -> child
+val static : Melhole.Template.t -> child
+
+val unset : input
+val no_inputs : input array
+
+val check : input -> 'a -> change
+
+val compare_inputs : input array -> input array -> change
+
+(** A mounted child: its nodes and what they hold. *)
+type live
+
+val nothing : live
+
+val visit : live -> (Dom.node -> unit[@u]) -> unit
+
+val front : live -> Dom.node Js.null -> Dom.node Js.null
+
+val release : live -> unit
+
+(** How a library's own kind of child, like Melact's components, reaches what it holds: made once per kind. *)
+type 'value hosting
+
+val hosting :
+  visit:('value -> (Dom.node -> unit[@u]) -> unit[@u]) ->
+  first:('value -> Dom.node Js.null -> Dom.node Js.null[@u]) ->
+  let_go:('value -> unit[@u]) ->
+  'value hosting
+
+val live : 'value hosting -> 'value -> live
+
+val hosted : 'value hosting -> live -> 'value option
+
+(** Whether a content hole shows its children, or only remembers them for hydration's first pass. *)
+type range = Settled | Collecting of collecting
+
+(** The children a collecting content hole was last given. *)
+and collecting
+
+(** Where a medium's nodes come from. *)
+type adoption = Fresh_nodes | Server_nodes
+
+(** How children reach the DOM: built in the browser, or adopted from the server's HTML. *)
+type medium = {
+  adoption : adoption;
+  text : (Melhole.Template.position -> string option -> Dom.text[@u]);  (** [None]: the text is written later. *)
+  root : (Melhole.Template.position -> Melhole.Template.t -> Dom.element[@u]);
+  placed : (Melhole.Template.position -> Dom.element -> unit[@u]);
+  opened : (Melhole.Template.position -> range[@u]);  (** What a new content hole does with its children. *)
+  built :
+    'made.
+    (int ->
+    Melhole.Template.position ->
+    (int -> Melhole.Template.position -> 'made[@u]) ->
+    ('made -> Dom.node Js.null -> Dom.node Js.null[@u]) ->
+    'made array[@u]);
+      (** Makes children in order; the last argument gives the node after one, from where it started. *)
+  adopt : 'frame. ('frame template -> ('frame -> unit[@u]) -> Melhole.Template.position -> Dom.element * 'frame[@u]);
+      (** Takes the server's nodes of a template over, as its frame. *)
+}
+
+val browser : medium
+val medium : medium ref
+
+(** How the server's medium adopts a template: the server's root and a frame made over its nodes. *)
+val adopted : ('frame template -> ('frame -> unit[@u]) -> Melhole.Template.position -> Dom.element * 'frame[@u])
+
+val host :
+  build:(Melhole.Template.position -> live[@u]) -> patch:(Melhole.Template.position -> live -> live option[@u]) -> child
+
+val build : child -> Melhole.Template.position -> live
+val update : Melhole.Template.position -> live -> child -> live
+val insert : Melhole.Template.position -> Dom.node -> unit
+
+(** The holes of a compiled template, written directly by its refresh. *)
+module Hole : sig
+  type text
+  type attr
+  type prop
+  type style
+  type content
+end
+
+val text_hole : Melhole.Template.position -> Hole.text
+val set_text : Hole.text -> string -> unit
+val attr_hole : Dom.element -> string -> Hole.attr
+val set_attr : Hole.attr -> string option -> unit
+val prop_hole : Dom.element -> string -> Hole.prop
+val set_prop : Hole.prop -> 'a -> unit
+
+(** The HTML of a [dangerouslySetInnerHTML] prop; compiled code reads it through this, so that it
+    needs no ppx of its own. *)
+external html_of : < __html : string > Js.t -> string = "__html" [@@mel.get]
+
+(** Puts every controlled value back that an input or change event left different from the state;
+    it runs by itself after the next render, and [act] runs it at once. *)
+val restore_controlled : unit -> unit
+
+val controlled_hole : Dom.element -> string -> Hole.prop
+val style_hole : Dom.element -> Hole.style
+val set_style : Hole.style -> (string * string) list -> unit
+
+val text_at : Melhole.Template.position -> Dom.text
+val put_text : input -> Dom.text -> Melhole.Dom_api.shown -> unit
+
+val write_sole_text : Dom.element -> Melhole.Dom_api.shown -> unit
+val put_sole_text : input -> Dom.element -> Melhole.Dom_api.shown -> unit
+val write_attr : Dom.element -> string -> string option -> unit
+val put_attr : input -> Dom.element -> string -> string option -> unit
+
+val served_write_text : Dom.text -> string -> unit
+val served_put_text : input -> Dom.text -> string -> unit
+val served_write_sole_text : Dom.element -> string -> unit
+val served_put_sole_text : input -> Dom.element -> string -> unit
+val served_write_attr : Dom.element -> string -> string option -> unit
+val served_put_attr : input -> Dom.element -> string -> string option -> unit
+val served_set_prop : Hole.prop -> 'a -> unit
+
+(** The property a delegated handler for an event is kept in, the same for every element. *)
+val event_key : string -> string
+
+(** Writes a handler that is a closure of its own, for one the compiler cannot link to a site. *)
+val put_handler : Dom.element -> string -> (Dom.event -> unit) -> unit
+
+(** A handler site compiled once, shared by every element that uses it. *)
+type ('data, 'dispatch) link
+
+val link : ('data -> 'dispatch -> Dom.event -> unit[@u]) -> ('data, 'dispatch) link
+val put_linked : Dom.element -> string -> ('data, 'dispatch) link -> 'dispatch -> 'data -> unit
+
+(** Runs [attach] once the current write is over, as React attaches refs after its commit. *)
+val attach_later : (unit -> unit) -> unit
+
+val content_hole : Melhole.Template.position -> Hole.content
+val release_content : Hole.content -> unit
+val set_content : Hole.content -> child -> unit
+
+type mounted
+
+(** Where hydration has got to among one parent's children. *)
+type cursor
+
+val mismatch : unit -> 'a
+val expected : string -> Dom.node Js.null -> 'a
+val inside : Dom.node -> cursor
+val adopt_element : cursor -> string -> Dom.node
+val adopt_static : cursor -> string -> unit
+val adopt_anchor : cursor -> unit
+val adopt_text : cursor -> string -> Dom.text
+(** What follows a content hole in its template: whatever comes next, or an anchor the hole ends at. *)
+type ending = Before_next | Before_anchor
+
+val adopt_content : cursor -> child -> ending -> Hole.content
+
+val adopt_finish : cursor -> unit
+val collected : Hole.content -> child
+val collected_text : Dom.text -> string
+val after_of : (live -> Dom.node Js.null -> Dom.node Js.null[@u])
+
+val mount :
+  child -> parent:'a Dom.node_like -> before:'b Dom.node_like option -> mounted
+
+val mount_over : child -> parent:'a Dom.node_like -> mounted
+val patch : mounted -> child -> unit
+val unmount : mounted -> unit
+
+(** The last value a pure expression gave and the inputs it gave it for. *)
+type 'value memory
+
+val memory : unit -> 'value memory
+
+(** The remembered value when every input is the one it was computed from ([===]), else a new one. *)
+val remember : 'value memory -> input array -> (unit -> 'value) -> 'value
+
+(** A long list cut into groups of [size] rows, each a [tag] element with [content-visibility: auto]
+    and a height estimate of [size * row_height] pixels, so that the browser skips the style, layout
+    and paint of groups out of view. Rows keep their keys within a group; a row that moves to
+    another group is made again there. *)
+val chunks : size:int -> row_height:int -> tag:string -> child -> child

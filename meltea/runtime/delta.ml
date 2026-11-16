@@ -1,6 +1,6 @@
 type kind = {
   arranged :
-    'item. ('item array -> 'item array -> Melhole.Reconcile.key array -> ('item -> Melhole.Reconcile.key[@u]) -> Melhole.View.arrangement option[@u]);
+    'item. ('item array -> 'item array -> Melhole.Reconcile.key array -> ('item -> Melhole.Reconcile.key[@u]) -> View.arrangement option[@u]);
 }
 
 (** The collection a fact started from, whatever its type. *)
@@ -88,7 +88,7 @@ let record kind before after =
   after
 
 let () =
-  Melhole.View.hinting :=
+  View.hinting :=
     {
       hint =
         (fun [@u] (Input before) (Input after) items old keys key ->

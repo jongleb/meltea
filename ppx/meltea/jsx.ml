@@ -411,7 +411,20 @@ let mapper =
       | _ -> super#expression expression
   end
 
-let structure items = mapper#structure (Dead.annotate items)
+let structure items =
+  let own =
+    object
+      inherit Ast_traverse.map
+
+      method! longident longident =
+        match longident with
+        | Ldot (Ldot (Lident "Melhole", (("View" | "Served" | "Transition") as runtime)), name) ->
+            Ldot (Ldot (Lident "Meltea_runtime", runtime), name)
+        | Ldot (Lident "Melhole", (("View" | "Served" | "Transition") as runtime)) -> Ldot (Lident "Meltea_runtime", runtime)
+        | _ -> longident
+    end
+  in
+  own#structure (mapper#structure (Dead.annotate items))
 let () =
   Driver.add_arg "-hydratable"
     (Arg.Unit (fun () -> Element.output := Element.Hydratable))

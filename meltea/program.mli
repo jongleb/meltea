@@ -38,7 +38,7 @@ type ('model, 'msg) slice =
 type ('model, 'msg) tracking
 
 (** The bits a template's refresh is narrowed to: [changed], or every bit while its frame is new. *)
-val opened : Melhole.View.input -> int -> int
+val opened : Meltea_runtime.View.input -> int -> int
 
 val mutable_read : unit
 [@@alert

@@ -4,8 +4,8 @@
 (** A view sending ['msg]: given the program's dispatch, the content to show. *)
 type 'msg t
 
-external node : (('msg -> unit) -> Melhole.View.child) -> 'msg t = "%identity"
-val render : 'msg t -> ('msg -> unit) -> Melhole.View.child
+external node : (('msg -> unit) -> Meltea_runtime.View.child) -> 'msg t = "%identity"
+val render : 'msg t -> ('msg -> unit) -> Meltea_runtime.View.child
 
 val none : 'msg t
 val text : string -> 'msg t
