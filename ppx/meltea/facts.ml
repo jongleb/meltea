@@ -12,7 +12,7 @@ type written = Exchanged of Location.t * Location.t | Rewritten of Location.t li
 (** A recorded fact: on the result of an application, or on a copy once it is written. *)
 type site =
   | Made of { before : Location.t; made : made }
-  | Copied of { before : Location.t; copy : string; writes : int; written : written }
+  | Copied of { before : Location.t; copy : string; copied : Ocaml_common.Ident.t; writes : int; written : written }
 
 (** Whether two pure expressions are the same expression. *)
 type likeness = Same | Different
@@ -248,7 +248,7 @@ let structure file structure =
                           | _ -> Rewritten [ first.exp_loc; second.exp_loc ])
                       | _ -> Rewritten (List.map (fun ((at : Ocaml_common.Typedtree.expression), _) -> at.exp_loc) found)
                     in
-                    Some (Copied { before = source.exp_loc; copy = name.txt; writes = List.length found; written })))
+                    Some (Copied { before = source.exp_loc; copy = name.txt; copied = copy; writes = List.length found; written })))
     | _ -> None
   in
   let sites = Hashtbl.create 16 in
@@ -264,6 +264,224 @@ let structure file structure =
     }
   in
   iterator.structure iterator (Melhole_typed.File.typed file);
+  let values = Hashtbl.create 64 and functions = Hashtbl.create 64 and fields = Hashtbl.create 64 and loops = ref [] and calls = ref [] in
+  let record_path (label : Ocaml_common.Data_types.label_description) =
+    match Ocaml_common.Types.get_desc label.lbl_res with Tconstr (path, _, _) -> Some path | _ -> None
+  in
+  let alike (one : Ocaml_common.Data_types.label_description) (other : Ocaml_common.Data_types.label_description) =
+    match (String.equal one.lbl_name other.lbl_name, record_path one, record_path other) with
+    | true, Some one, Some other when Ocaml_common.Path.same one other -> Same
+    | _ -> Different
+  in
+  let gathering =
+    {
+      Ocaml_common.Tast_iterator.default_iterator with
+      value_binding =
+        (fun self (binding : Ocaml_common.Typedtree.value_binding) ->
+          (match (binding.vb_pat.pat_desc, binding.vb_expr.exp_desc) with
+          | Tpat_var (ident, _, _), Texp_function _ -> Hashtbl.replace functions ident binding.vb_expr
+          | _ ->
+              List.iter
+                (fun ident -> Hashtbl.replace values ident binding.vb_expr)
+                (Ocaml_common.Typedtree.pat_bound_idents binding.vb_pat));
+          Ocaml_common.Tast_iterator.default_iterator.value_binding self binding);
+      pat =
+        (fun (type kind) self (pattern : kind Ocaml_common.Typedtree.general_pattern) ->
+          (match pattern.pat_desc with
+          | Tpat_record (bound, _) ->
+              List.iter
+                (fun (_, label, (inner : Ocaml_common.Typedtree.pattern)) ->
+                  match inner.pat_desc with Tpat_var (ident, _, _) -> Hashtbl.replace fields ident label | _ -> ())
+                bound
+          | _ -> ());
+          Ocaml_common.Tast_iterator.default_iterator.pat self pattern);
+      expr =
+        (fun self expression ->
+          (match expression.exp_desc with
+          | Texp_apply ({ exp_desc = Texp_ident (path, _, _); _ }, (Nolabel, Arg source) :: _)
+            when List.mem (Ocaml_common.Path.name path) [ "Melhole.View.rows"; "Melhole__View.rows" ] ->
+              loops := (expression.exp_loc, source) :: !loops
+          | Texp_apply ({ exp_desc = Texp_ident (Pident callee, _, _); _ }, arguments) -> calls := (callee, arguments) :: !calls
+          | _ -> ());
+          Ocaml_common.Tast_iterator.default_iterator.expr self expression);
+    }
+  in
+  gathering.structure gathering (Melhole_typed.File.typed file);
+  let records = ref [] in
+  let finding =
+    {
+      Ocaml_common.Tast_iterator.default_iterator with
+      expr =
+        (fun self expression ->
+          (match expression.exp_desc with Texp_record { fields; _ } -> records := fields :: !records | _ -> ());
+          Ocaml_common.Tast_iterator.default_iterator.expr self expression);
+    }
+  in
+  finding.structure finding (Melhole_typed.File.typed file);
+  let reads (label : Ocaml_common.Data_types.label_description) (value : Ocaml_common.Typedtree.expression) =
+    let either first second = match (first, second) with Never_refers, Never_refers -> Never_refers | (Refers | Never_refers), _ -> Refers in
+    let row =
+      match Ocaml_common.Types.get_desc label.lbl_arg with
+      | Tconstr (_, [ element ], _) -> (
+          match Ocaml_common.Types.get_desc element with Tconstr (path, _, _) -> Some path | _ -> None)
+      | _ -> None
+    in
+    match (row, record_path label) with
+    | None, _ | _, None -> Refers
+    | Some row, Some record ->
+        let mentions kinds type_expr =
+          let seen = Hashtbl.create 8 and found = ref Never_refers in
+          let rec visit type_expr =
+            match Hashtbl.mem seen (Ocaml_common.Types.get_id type_expr) with
+            | true -> ()
+            | false -> (
+                Hashtbl.replace seen (Ocaml_common.Types.get_id type_expr) ();
+                (match Ocaml_common.Types.get_desc type_expr with
+                | Tconstr (path, _, _) ->
+                    List.iter (fun kind -> match Ocaml_common.Path.same path kind with true -> found := Refers | false -> ()) kinds
+                | _ -> ());
+                Ocaml_common.Btype.iter_type_expr visit type_expr)
+          in
+          visit type_expr;
+          !found
+        in
+        let named = Hashtbl.create 16 in
+        Hashtbl.iter
+          (fun callee (definition : Ocaml_common.Typedtree.expression) ->
+            match definition.exp_desc with
+            | Texp_function (parameters, _) ->
+                let called = List.find_opt (fun (other, _) -> Ocaml_common.Ident.same other callee) !calls in
+                List.iter
+                  (fun (parameter : Ocaml_common.Typedtree.function_param) ->
+                    let pattern =
+                      match parameter.fp_kind with Tparam_pat pattern | Tparam_optional_default (pattern, _) -> pattern
+                    in
+                    Hashtbl.replace named parameter.fp_param
+                      (Option.fold ~none:(mentions [ row; record ] pattern.pat_type) ~some:(fun _ -> Never_refers) called))
+                  parameters
+            | _ -> ())
+          functions;
+        let values_seen = Hashtbl.create 16 and bodies_seen = Hashtbl.create 16 in
+        let rec taint (expression : Ocaml_common.Typedtree.expression) =
+          let found = ref Never_refers in
+          let iterator =
+            {
+              Ocaml_common.Tast_iterator.default_iterator with
+              expr =
+                (fun self (expression : Ocaml_common.Typedtree.expression) ->
+                  match expression.exp_desc with
+                  | Texp_field (_, _, read) -> found := either !found (mentions [ row ] read.lbl_arg)
+                  | Texp_ident (Pident ident, _, _) -> found := either !found (named_taint ident expression.exp_type)
+                  | Texp_apply ({ exp_desc = Texp_ident (Pident callee, _, _); _ }, _) when Hashtbl.mem functions callee ->
+                      found := either !found (body callee)
+                  | _ -> Ocaml_common.Tast_iterator.default_iterator.expr self expression);
+            }
+          in
+          iterator.expr iterator expression;
+          !found
+        and named_taint ident type_expr =
+          match Hashtbl.find_opt named ident with
+          | Some found -> found
+          | None -> (
+              match (Hashtbl.find_opt values ident, Hashtbl.find_opt functions ident) with
+              | Some bound, _ -> (
+                  match Hashtbl.find_opt values_seen ident with
+                  | Some found -> found
+                  | None ->
+                      Hashtbl.replace values_seen ident Never_refers;
+                      let found = taint bound in
+                      Hashtbl.replace values_seen ident found;
+                      found)
+              | None, Some _ -> body ident
+              | None, None -> mentions [ row; record ] type_expr)
+        and body callee =
+          match Hashtbl.find_opt bodies_seen callee with
+          | Some found -> found
+          | None ->
+              Hashtbl.replace bodies_seen callee Never_refers;
+              let found =
+                Option.fold ~none:Refers
+                  ~some:(fun (definition : Ocaml_common.Typedtree.expression) ->
+                    match definition.exp_desc with
+                    | Texp_function (_, Tfunction_body inner) -> taint inner
+                    | _ -> taint definition)
+                  (Hashtbl.find_opt functions callee)
+              in
+              Hashtbl.replace bodies_seen callee found;
+              found
+        in
+        let rec settle () =
+          Hashtbl.reset values_seen;
+          Hashtbl.reset bodies_seen;
+          let changed =
+            List.fold_left
+              (fun changed (callee, arguments) ->
+                match Hashtbl.find_opt functions callee with
+                | Some { Ocaml_common.Typedtree.exp_desc = Texp_function (parameters, _); _ } ->
+                    let given = List.filter_map (fun (label, argument) -> match (label, argument) with Ocaml_common.Asttypes.Nolabel, Ocaml_common.Typedtree.Arg argument -> Some argument | _ -> None) arguments in
+                    List.fold_left
+                      (fun changed ((parameter : Ocaml_common.Typedtree.function_param), argument) ->
+                        match (Hashtbl.find_opt named parameter.fp_param, taint argument) with
+                        | Some Never_refers, Refers ->
+                            Hashtbl.replace named parameter.fp_param Refers;
+                            Refers
+                        | _ -> changed)
+                      changed
+                      (List.filteri (fun index _ -> index < List.length given) parameters |> List.mapi (fun index parameter -> (parameter, List.nth given index)))
+                | _ -> changed)
+              Never_refers !calls
+          in
+          match changed with Refers -> settle () | Never_refers -> ()
+        in
+        settle ();
+        Hashtbl.reset values_seen;
+        Hashtbl.reset bodies_seen;
+        taint value
+  in
+  let known (label : Ocaml_common.Data_types.label_description) (value : Ocaml_common.Typedtree.expression) =
+    let fact (expression : Ocaml_common.Typedtree.expression) =
+      match Hashtbl.find_opt sites expression.exp_loc with Some (Made _) -> Some () | Some (Copied _) | None -> None
+    in
+    let copy ident =
+      Hashtbl.fold
+        (fun _ site found -> match site with Copied { copied; _ } when Ocaml_common.Ident.same copied ident -> Some () | _ -> found)
+        sites None
+    in
+    let anew () = match reads label value with Never_refers -> Some () | Refers -> None in
+    match value.exp_desc with
+    | Texp_field (_, _, read) -> ( match alike read label with Same -> Some () | Different -> anew ())
+    | Texp_ident (Pident ident, _, _) -> (
+        match copy ident with
+        | Some () -> Some ()
+        | None -> ( match Option.bind (Hashtbl.find_opt values ident) fact with Some () -> Some () | None -> anew ()))
+    | _ -> ( match fact value with Some () -> Some () | None -> anew ())
+  in
+  let unscanned = Hashtbl.create 4 in
+  List.iter
+    (fun (loc, (source : Ocaml_common.Typedtree.expression)) ->
+      let label =
+        match source.exp_desc with
+        | Texp_field (_, _, label) -> Some label
+        | Texp_ident (Pident ident, _, _) -> Hashtbl.find_opt fields ident
+        | _ -> None
+      in
+      Option.iter
+        (fun label ->
+          let unknown =
+            List.find_map
+              (fun fields ->
+                Array.find_map
+                  (fun ((written : Ocaml_common.Data_types.label_description), definition) ->
+                    match (alike written label, definition) with
+                    | Same, Ocaml_common.Typedtree.Overridden (_, value) -> (
+                        match known label value with Some () -> None | None -> Some ())
+                    | Same, Ocaml_common.Typedtree.Kept _ | Different, _ -> None)
+                  fields)
+              !records
+          in
+          match unknown with None -> Hashtbl.replace unscanned loc () | Some () -> ())
+        label)
+    !loops;
   let source loc (expression : expression) =
     let finder =
       object
@@ -287,6 +505,24 @@ let structure file structure =
       method! expression expression =
         let expression = super#expression expression in
         let loc = expression.pexp_loc in
+        let expression =
+          match (expression.pexp_desc, Hashtbl.mem unscanned loc) with
+          | Pexp_apply (({ pexp_desc = Pexp_ident { txt = Ldot (Ldot (Lident "Melhole", "View"), "rows"); _ }; _ } as callee), arguments), true ->
+              {
+                expression with
+                pexp_desc =
+                  Pexp_apply
+                    ( callee,
+                      List.map
+                        (fun (label, (argument : expression)) ->
+                          match argument.pexp_desc with
+                          | Pexp_ident { txt = Ldot (Ldot (Lident "Melhole", "View"), "scans"); loc } ->
+                              (label, { argument with pexp_desc = Pexp_ident { txt = Ldot (Ldot (Lident "Melhole", "View"), "unscanned"); loc } })
+                          | _ -> (label, argument))
+                        arguments );
+              }
+          | _ -> expression
+        in
         let recorded kind before after = [%expr Melhole_meltea.Delta.record [%e kind] [%e before] [%e after]] in
         match (Hashtbl.find_opt sites loc, expression.pexp_desc) with
         | Some (Made { before; made }), Pexp_apply _ ->
@@ -303,7 +539,7 @@ let structure file structure =
             in
             Option.value ~default:expression
               (Option.bind kind (fun kind -> Option.map (fun before -> recorded kind before expression) (at before)))
-        | Some (Copied { before; copy; writes; written }), Pexp_let (Nonrecursive, [ binding ], body) ->
+        | Some (Copied { before; copy; writes; written; _ }), Pexp_let (Nonrecursive, [ binding ], body) ->
             let at place = source place expression in
             let kind =
               match written with

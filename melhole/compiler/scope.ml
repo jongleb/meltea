@@ -8,6 +8,12 @@ class mapper =
     method locals = locals
     method definitions = definitions
 
+    method hook_call callee =
+      match callee.pexp_desc with
+      | Pexp_ident { txt; _ } -> (
+          match Hook_name.of_name (Longident.last_exn txt) with Hook _ -> `Hook | Plain -> `Plain)
+      | _ -> `Plain
+
     method private within : 'a. string list -> (unit -> 'a) -> 'a =
       fun names run ->
         let saved = locals and known = definitions in
@@ -56,10 +62,10 @@ class mapper =
                       method! expression expression found =
                         match (found, expression.pexp_desc) with
                         | `Hooked, _ -> `Hooked
-                        | `Pure, Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
-                            match Hook_name.of_name (Longident.last_exn txt) with
-                            | Hook _ -> `Hooked
-                            | Plain -> super#expression expression found)
+                        | `Pure, Pexp_apply (callee, _) -> (
+                            match self#hook_call callee with
+                            | `Hook -> `Hooked
+                            | `Plain -> super#expression expression found)
                         | `Pure, _ -> super#expression expression found
                     end
                   in

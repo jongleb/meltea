@@ -1040,9 +1040,85 @@ let adopted =
       refresh frame [@u];
       (root, frame)
 
+type 'item scanning =
+  ('item array -> 'item array -> Reconcile.key array -> ('item -> Reconcile.key[@u]) -> change -> [ arrangement | `Rearranged ][@u])
+
+let scans =
+      (fun [@u] items old_items old_keys key outer_change ->
+        let count = Array.length items and old_count = Array.length old_items in
+        let rec differing index found size renewed =
+          match (index = count, size) with
+          | true, _ -> Some (Array.of_list (List.rev found), List.rev renewed)
+          | false, 64 -> None
+          | false, _ -> (
+              let item = Array.unsafe_get items index in
+              match Dom_api.same item (Array.unsafe_get old_items index) with
+              | true -> differing (index + 1) found size renewed
+              | false -> (
+                  let named = key item [@u] in
+                  match Dom_api.same named (Array.unsafe_get old_keys index) with
+                  | true -> differing (index + 1) found size (index :: renewed)
+                  | false -> differing (index + 1) ((index, named) :: found) (size + 1) renewed))
+        in
+        match (count = old_count, outer_change) with
+        | false, Changed -> `Rearranged
+        | false, Unchanged -> (
+            let rec front index =
+              if index < count && index < old_count && Dom_api.same (Array.unsafe_get items index) (Array.unsafe_get old_items index)
+              then front (index + 1)
+              else index
+            in
+            let from = front 0 in
+            let rec back kept =
+              if
+                kept < count - from
+                && kept < old_count - from
+                && Dom_api.same (Array.unsafe_get items (count - 1 - kept)) (Array.unsafe_get old_items (old_count - 1 - kept))
+              then back (kept + 1)
+              else kept
+            in
+            let kept = back 0 in
+            match (count, from + kept = count, from + kept = old_count) with
+            | 0, _, _ -> `Rearranged
+            | _, true, false -> `Removed (from, old_count - kept)
+            | _, false, true -> `Inserted (from, count - kept)
+            | _, true, true | _, false, false -> `Rearranged)
+        | true, _ -> (
+            match (differing 0 [] 0 [], outer_change) with
+            | Some ([||], renewed), _ -> `In_place renewed
+            | Some (moved, renewed), Unchanged ->
+                let size = Array.length moved in
+                let sources = Array.make size (-1) in
+                let rec claim at =
+                  match at = size with
+                  | true -> `Shuffled (moved, sources, renewed)
+                  | false -> (
+                      let wanted = snd (Array.unsafe_get moved at) in
+                      let rec free source =
+                        match source = size with
+                        | true -> `Rearranged
+                        | false -> (
+                            match
+                              ( Dom_api.same wanted (Array.unsafe_get old_keys (fst (Array.unsafe_get moved source))),
+                                Array.exists (fun claimed -> claimed = source) sources )
+                            with
+                            | true, false ->
+                                Array.unsafe_set sources at source;
+                                claim (at + 1)
+                            | true, true | false, _ -> free (source + 1))
+                      in
+                      free 0)
+                in
+                claim 0
+            | Some _, Changed | None, _ -> `Rearranged))
+
+let unscanned =
+ fun [@u] items old_items _ _ _ ->
+  match (Array.length old_items, Array.length items) with 0, count when count > 0 -> `Inserted (0, count) | _ -> `Rearranged
+
 let rows (type frame source item) (source : source) (listed : source -> item array) (template : frame template)
     (root : (frame -> Dom.element)[@u]) (refresh : (frame -> item -> unit)[@u]) (key : (item -> Reconcile.key)[@u])
-    project pieces outer selectors =
+    (scanning : item scanning) project pieces outer selectors =
   let showing (items : item array) =
   let count = Array.length items in
   let mount (position : Template.position) item =
@@ -1116,67 +1192,6 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
             with
             | Some indexes -> Some (shown items old.keys old.projections old.frames indexes)
             | None ->
-            let rec differing index found size renewed =
-              match (index = count, size) with
-              | true, _ -> Some (Array.of_list (List.rev found), List.rev renewed)
-              | false, 64 -> None
-              | false, _ -> (
-                  let item = Array.unsafe_get items index in
-                  match Dom_api.same item (Array.unsafe_get old.items index) with
-                  | true -> differing (index + 1) found size renewed
-                  | false -> (
-                      let named = key item [@u] in
-                      match Dom_api.same named (Array.unsafe_get old.keys index) with
-                      | true -> differing (index + 1) found size (index :: renewed)
-                      | false -> differing (index + 1) ((index, named) :: found) (size + 1) renewed))
-            in
-            let shuffled moved renewed =
-                  let size = Array.length moved in
-                  let sources = Array.make size (-1) in
-                  let rec claim at =
-                    match at = size with
-                    | true -> Some (`Shuffled (moved, sources, renewed))
-                    | false -> (
-                        let wanted = snd (Array.unsafe_get moved at) in
-                        let rec free source =
-                          match source = size with
-                          | true -> None
-                          | false -> (
-                              match
-                                ( Dom_api.same wanted (Array.unsafe_get old.keys (fst (Array.unsafe_get moved source))),
-                                  Array.exists (fun claimed -> claimed = source) sources )
-                              with
-                              | true, false -> Some source
-                              | true, true | false, _ -> free (source + 1))
-                        in
-                        Option.bind (free 0) (fun source ->
-                            Array.unsafe_set sources at source;
-                            claim (at + 1)))
-                  in
-                  claim 0
-            in
-            let trimmed () =
-              let rec front index =
-                if index < count && index < old_count && Dom_api.same (Array.unsafe_get items index) (Array.unsafe_get old.items index)
-                then front (index + 1)
-                else index
-              in
-              let from = front 0 in
-              let rec back kept =
-                if
-                  kept < count - from
-                  && kept < old_count - from
-                  && Dom_api.same (Array.unsafe_get items (count - 1 - kept)) (Array.unsafe_get old.items (old_count - 1 - kept))
-                then back (kept + 1)
-                else kept
-              in
-              let kept = back 0 in
-              match (count, from + kept = count, from + kept = old_count) with
-              | 0, _, _ -> `Rearranged
-              | _, true, false -> `Removed (from, old_count - kept)
-              | _, false, true -> `Inserted (from, count - kept)
-              | _, true, true | _, false, false -> `Rearranged
-            in
             let arrangement =
               match
                 match outer_change with
@@ -1184,15 +1199,7 @@ let rows (type frame source item) (source : source) (listed : source -> item arr
                 | Changed -> None
               with
               | Some hinted -> (hinted :> [ arrangement | `Rearranged ])
-              | None -> (
-                  match (count = old_count, outer_change) with
-                  | false, Unchanged -> trimmed ()
-                  | false, Changed -> `Rearranged
-                  | true, _ -> (
-                      match (differing 0 [] 0 [], outer_change) with
-                      | Some ([||], renewed), _ -> `In_place renewed
-                      | Some (moved, renewed), Unchanged -> Option.value ~default:`Rearranged (shuffled moved renewed)
-                      | Some _, Changed | None, _ -> `Rearranged))
+              | None -> scanning items (reused old.items) old.keys key outer_change [@u]
             in
             let joined before middle after = Array.concat [ before; middle; after ] in
             match arrangement with

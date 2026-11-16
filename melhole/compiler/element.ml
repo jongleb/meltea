@@ -1477,7 +1477,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                           [%expr
                             Melhole.View.rows [%e source] [%e listed] [%e template] [%e root] [%e refresh]
                               [%e uncurried [%expr fun __melhole_item -> [%e given keyed]]]
-                              [%e project] [%e pieces] [%e outer] [%e selectors]]
+                              Melhole.View.scans [%e project] [%e pieces] [%e outer] [%e selectors]]
                         in
                         match row.pexp_desc with
                         | Pexp_ident _ -> [%expr let _ = [%e row] in [%e loop]]

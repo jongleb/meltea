@@ -106,6 +106,16 @@ type hinting = {
 (** How loops learn facts: knowing none, until code that records them is linked. *)
 val hinting : hinting ref
 
+(** How a compiled row loop finds out how its items changed when no fact tells it: [scans] compares
+    them with the items it shows (a block inserted or removed, rows moved, items renewed in place);
+    [unscanned] goes straight to matching rows by key, which is right for every change, and links none
+    of the scans. Meltea's typed pass passes [unscanned] to a loop whose items change only in ways
+    that facts record or that make them anew. *)
+type 'item scanning
+
+val scans : 'item scanning
+val unscanned : 'item scanning
+
 val rows :
   'source ->
   ('source -> 'item array) ->
@@ -113,6 +123,7 @@ val rows :
   ('frame -> Dom.element[@u]) ->
   ('frame -> 'item -> unit[@u]) ->
   ('item -> Reconcile.key[@u]) ->
+  'item scanning ->
   ('item -> int -> input array -> int -> unit[@u]) ->
   int ->
   input array ->
