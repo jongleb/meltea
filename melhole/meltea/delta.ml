@@ -1,6 +1,6 @@
 type kind = {
   arranged :
-    'item. ('item array -> 'item array -> Reconcile.key array -> ('item -> Reconcile.key[@u]) -> View.arrangement option[@u]);
+    'item. ('item array -> 'item array -> Melhole.Reconcile.key array -> ('item -> Melhole.Reconcile.key[@u]) -> Melhole.View.arrangement option[@u]);
 }
 
 (** The collection a fact started from, whatever its type. *)
@@ -59,7 +59,7 @@ let rewritten places =
                 match
                   0 <= place
                   && place < Array.length items
-                  && Dom_api.same (key (Array.unsafe_get items place) [@u]) (Array.unsafe_get keys place)
+                  && Melhole.Dom_api.same (key (Array.unsafe_get items place) [@u]) (Array.unsafe_get keys place)
                 with
                 | true -> Some (place :: renewed)
                 | false -> None))
@@ -76,7 +76,7 @@ let strided step from =
           match place < Array.length items with
           | false -> Some (`In_place (List.rev found))
           | true -> (
-              match Dom_api.same (key (Array.unsafe_get items place) [@u]) (Array.unsafe_get keys place) with
+              match Melhole.Dom_api.same (key (Array.unsafe_get items place) [@u]) (Array.unsafe_get keys place) with
               | true -> renewed (place + step) (place :: found)
               | false -> None)
         in
@@ -88,12 +88,12 @@ let record kind before after =
   after
 
 let () =
-  View.hinting :=
+  Melhole.View.hinting :=
     {
       hint =
         (fun [@u] (Input before) (Input after) items old keys key ->
           Option.bind (Js.Undefined.toOption (known table after)) (fun fact ->
-              match Dom_api.same (deref fact.before) before with
+              match Melhole.Dom_api.same (deref fact.before) before with
               | true -> fact.kind.arranged items old keys key [@u]
               | false -> None));
     }

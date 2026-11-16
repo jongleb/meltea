@@ -287,19 +287,19 @@ let structure file structure =
       method! expression expression =
         let expression = super#expression expression in
         let loc = expression.pexp_loc in
-        let recorded kind before after = [%expr Melhole.Delta.record [%e kind] [%e before] [%e after]] in
+        let recorded kind before after = [%expr Melhole_meltea.Delta.record [%e kind] [%e before] [%e after]] in
         match (Hashtbl.find_opt sites loc, expression.pexp_desc) with
         | Some (Made { before; made }), Pexp_apply _ ->
             let at place = source place expression in
             let kind =
               match made with
-              | Appended -> Some [%expr Melhole.Delta.appended]
+              | Appended -> Some [%expr Melhole_meltea.Delta.appended]
               | Cut (until, from) ->
-                  Option.bind (at until) (fun until -> Option.map (fun from -> [%expr Melhole.Delta.cut [%e until] [%e from]]) (at from))
-              | Point (Constant place) -> Some [%expr Melhole.Delta.rewritten [| [%e Ast_builder.Default.eint ~loc place] |]]
-              | Point (Source place) -> Option.map (fun place -> [%expr Melhole.Delta.rewritten [| [%e place] |]]) (at place)
+                  Option.bind (at until) (fun until -> Option.map (fun from -> [%expr Melhole_meltea.Delta.cut [%e until] [%e from]]) (at from))
+              | Point (Constant place) -> Some [%expr Melhole_meltea.Delta.rewritten [| [%e Ast_builder.Default.eint ~loc place] |]]
+              | Point (Source place) -> Option.map (fun place -> [%expr Melhole_meltea.Delta.rewritten [| [%e place] |]]) (at place)
               | Strided (step, from) ->
-                  Some [%expr Melhole.Delta.strided [%e Ast_builder.Default.eint ~loc step] [%e Ast_builder.Default.eint ~loc from]]
+                  Some [%expr Melhole_meltea.Delta.strided [%e Ast_builder.Default.eint ~loc step] [%e Ast_builder.Default.eint ~loc from]]
             in
             Option.value ~default:expression
               (Option.bind kind (fun kind -> Option.map (fun before -> recorded kind before expression) (at before)))
@@ -308,10 +308,10 @@ let structure file structure =
             let kind =
               match written with
               | Exchanged (first, second) ->
-                  Option.bind (at first) (fun first -> Option.map (fun second -> [%expr Melhole.Delta.exchanged [%e first] [%e second]]) (at second))
+                  Option.bind (at first) (fun first -> Option.map (fun second -> [%expr Melhole_meltea.Delta.exchanged [%e first] [%e second]]) (at second))
               | Rewritten places ->
                   Option.map
-                    (fun places -> [%expr Melhole.Delta.rewritten [%e Ast_builder.Default.pexp_array ~loc places]])
+                    (fun places -> [%expr Melhole_meltea.Delta.rewritten [%e Ast_builder.Default.pexp_array ~loc places]])
                     (List.fold_right (fun place found -> Option.bind found (fun rest -> Option.map (fun place -> place :: rest) (at place))) places (Some []))
             in
             let rec inserted count (body : expression) note =

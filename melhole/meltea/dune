@@ -1,0 +1,7 @@
+(library
+ (name melhole_meltea)
+ (public_name melhole.meltea)
+ (modes melange)
+ (libraries melhole melange.dom)
+ (preprocess
+  (pps melange.ppx)))
