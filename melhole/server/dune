@@ -1,4 +1,4 @@
 (library
  (name melhole_server)
  (public_name melhole.server)
- (modes native melange))
+ (modes byte native melange))

@@ -88,6 +88,24 @@ type 'frame template
 (** The items of a loop over an array: the array itself. *)
 val arrayed : 'item array -> 'item array
 
+(** How a compiled row loop's items changed, as one of its ways to patch: rows removed from the
+    first index to before the second; items inserted there; rows that changed places with their
+    keys, where they came from, and the places whose items alone changed; or every row in its place
+    and only the items at these places new. *)
+type arrangement =
+  [ `Removed of int * int | `Inserted of int * int | `Shuffled of (int * Reconcile.key) array * int array * int list | `In_place of int list ]
+
+(** What a compiled row loop asks of the facts recorded about its items: [hint before after items
+    old_items old_keys key], with the sources it showed and is given; [None] when none is known. *)
+type hinting = {
+  hint :
+    'item.
+    (input -> input -> 'item array -> 'item array -> Reconcile.key array -> ('item -> Reconcile.key[@u]) -> arrangement option[@u]);
+}
+
+(** How loops learn facts: knowing none, until code that records them is linked. *)
+val hinting : hinting ref
+
 val rows :
   'source ->
   ('source -> 'item array) ->

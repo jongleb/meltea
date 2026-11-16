@@ -28,7 +28,7 @@ let reads (binding : Ocaml_common.Typedtree.value_binding) =
       | _ -> [])
   | _ -> []
 
-let check structure =
+let check file structure =
   let views =
     List.filter_map
       (fun item ->
@@ -39,8 +39,6 @@ let check structure =
         | _ -> None)
       structure
   in
-  Option.fold ~none:[]
-    ~some:(fun file ->
       List.concat_map
         (fun (item : Ocaml_common.Typedtree.structure_item) ->
           match item.str_desc with
@@ -65,8 +63,7 @@ let check structure =
                   | _ -> [])
                 bindings
           | _ -> [])
-        (Melhole_typed.File.typed file).str_items)
-    (Melhole_typed.File.of_structure structure)
+        (Melhole_typed.File.typed file).str_items
 
 let () =
   Driver.register_transformation "meltea-typed"
@@ -74,4 +71,7 @@ let () =
       (Driver.Instrument.make ~position:After (fun structure ->
            match Melhole_typed.Mode.current () with
            | Melhole_typed.Mode.Untyped -> structure
-           | Melhole_typed.Mode.Typed -> structure @ check structure))
+           | Melhole_typed.Mode.Typed ->
+               Option.fold ~none:structure
+                 ~some:(fun file -> Facts.structure file structure @ check file structure)
+                 (Melhole_typed.File.of_structure structure)))

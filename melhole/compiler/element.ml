@@ -954,26 +954,15 @@ let lowercase frontend ~loc ~attributes tag arguments =
         match guard with
         | Free.Volatile -> set
         | Free.Reads names ->
-            let flags = match names with [] -> [ flag constant ] | _ :: _ -> List.map (fun name -> flag (slot name)) names in
-            let unchanged =
-              ppat_tuple ~loc
-                (List.map (fun _ -> [%pat? Melhole.View.Unchanged]) flags)
+            let first, rest =
+              match names with
+              | [] -> (flag constant, [])
+              | name :: names -> (flag (slot name), List.map (fun name -> flag (slot name)) names)
             in
-            let changed at =
-              ppat_tuple ~loc
-                (List.mapi (fun other _ -> if Int.equal at other then [%pat? Melhole.View.Changed] else [%pat? _]) flags)
-            in
-            pexp_match ~loc (pexp_tuple ~loc flags)
-              [
-                case ~lhs:unchanged ~guard:None ~rhs:[%expr ()];
-                case
-                  ~lhs:
-                    (List.fold_left
-                       (fun alternatives at -> ppat_or ~loc alternatives (changed at))
-                       (changed 0)
-                       (List.init (List.length flags - 1) succ))
-                  ~guard:None ~rhs:set;
-              ])
+            let changed flag = [%expr [%e flag] == Melhole.View.Changed] in
+            [%expr
+              if [%e List.fold_left (fun any flag -> [%expr [%e any] || [%e changed flag]]) (changed first) rest] then
+                [%e set]])
       (List.combine guards holes)
   in
   let sets =
