@@ -1,8 +1,13 @@
+; The example's library is compiled for the browser alone, as its app mounts and never hydrates; the
+; tests render TodoMVC on the server and hydrate it, so they compile their own copy of it hydratable.
+(copy_files#
+ (files ../../examples/todomvc/todomvc.mlx))
+
 (melange.emit
  (target output)
  (alias runtest-js)
- (libraries todomvc meltea melhole.server testing melange.dom)
+ (libraries meltea jsonkit-melange melhole.server testing melange.dom)
  (module_systems
   (es6 mjs))
  (preprocess
-  (pps melange.ppx meltea-ppx)))
+  (staged_pps melange.ppx meltea-ppx jsonkit-melange.ppx -- -hydratable -typed)))
