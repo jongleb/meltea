@@ -8,11 +8,7 @@ class mapper =
     method locals = locals
     method definitions = definitions
 
-    method hook_call callee =
-      match callee.pexp_desc with
-      | Pexp_ident { txt; _ } -> (
-          match Hook_name.of_name (Longident.last_exn txt) with Hook _ -> `Hook | Plain -> `Plain)
-      | _ -> `Plain
+    method stateful_call : expression -> [ `Stateful | `Pure ] = fun _ -> `Pure
 
     method private within : 'a. string list -> (unit -> 'a) -> 'a =
       fun names run ->
@@ -54,18 +50,18 @@ class mapper =
                          | _ -> None)
                        definition.pexp_attributes)
                 in
-                let hooked definition =
+                let stateful definition =
                   let finder =
                     object
-                      inherit [[ `Hooked | `Pure ]] Ast_traverse.fold as super
+                      inherit [[ `Stateful | `Pure ]] Ast_traverse.fold as super
 
                       method! expression expression found =
                         match (found, expression.pexp_desc) with
-                        | `Hooked, _ -> `Hooked
+                        | `Stateful, _ -> `Stateful
                         | `Pure, Pexp_apply (callee, _) -> (
-                            match self#hook_call callee with
-                            | `Hook -> `Hooked
-                            | `Plain -> super#expression expression found)
+                            match self#stateful_call callee with
+                            | `Stateful -> `Stateful
+                            | `Pure -> super#expression expression found)
                         | `Pure, _ -> super#expression expression found
                     end
                   in
@@ -73,9 +69,9 @@ class mapper =
                 in
                 List.filter_map
                   (fun binding ->
-                    match (binding.pvb_pat.ppat_desc, hooked binding.pvb_expr) with
+                    match (binding.pvb_pat.ppat_desc, stateful binding.pvb_expr) with
                     | Ppat_var { txt; _ }, `Pure -> Some (txt, uncached binding.pvb_expr)
-                    | Ppat_var _, `Hooked | _, (`Pure | `Hooked) -> None)
+                    | Ppat_var _, `Stateful | _, (`Pure | `Stateful) -> None)
                   bindings
           in
           let bindings =
