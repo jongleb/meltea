@@ -686,7 +686,10 @@ let lowercase frontend ~loc ~attributes tag arguments =
                 match event.pexp_desc with
                 | Pexp_constant (Pconst_string (name, _, _)) -> (
                     match Melhole_shared.Delegation.compiled name with
-                    | Delegated -> (effects, [%expr Melhole.Events.delegate [%e event]])
+                    | Delegated -> (
+                        match name with
+                        | "onchange" -> (effects, [%expr Melhole.Events.delegate_tracked [%e event]])
+                        | _ -> (effects, [%expr Melhole.Events.delegate [%e event]]))
                     | Crossing -> (effects, [%expr Melhole.Events.delegate_crossing [%e event]])
                     | Direct -> ([%expr Melhole.Events.listen [%e element] [%e event]] :: effects, [%expr Melhole.View.event_key [%e event]]))
                 | _ -> ([%expr Melhole.Events.listen [%e element] [%e event]] :: effects, [%expr Melhole.View.event_key [%e event]])

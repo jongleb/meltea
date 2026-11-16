@@ -23,6 +23,11 @@ val register : Dom.element -> string -> registration
     element keeps its handler for it under; compiled templates call it once, not per element. *)
 val delegate : string -> string
 
+(** [delegate_tracked "onchange"]: listens at the document for React's [onChange] on an input or a
+    textarea, delivered on [input] and [change] only when what the element shows differs from what
+    [track] recorded; a bundle that never calls it carries none of the tracking. *)
+val delegate_tracked : string -> string
+
 (** Listens once on [document] for an element being entered or left ([mouseenter], [mouseleave],
     [pointerenter], [pointerleave]); compiled templates call it, so an app without such handlers
     carries none of it; gives the property an element keeps its handler for it under. *)

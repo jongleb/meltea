@@ -68,7 +68,7 @@ let shown element =
 
 let track element = Dom_api.set_property element tracked (shown element)
 
-let delegate event =
+let delegated event natives (reach : (Dom.node -> (Dom.event -> unit) -> Dom.event -> unit)[@u]) =
   match Js.Undefined.toOption (delivery deliveries event) with
   | Some _ -> key_of event
   | None ->
@@ -76,7 +76,6 @@ let delegate event =
       let pointing =
         match event with "click" | "dblclick" | "mousedown" | "mousemove" | "mouseup" -> `Mouse | _ -> `Other
       in
-      let tracking = match event with "onchange" -> `Tracking | _ -> `Untracked in
       let deliver native =
         let stop = event_property native until in
         let rec bubble node =
@@ -89,21 +88,7 @@ let delegate event =
                   | `Mouse, ("BUTTON" | "INPUT" | "SELECT" | "TEXTAREA")
                     when (Dom_api.property (Dom_api.unsafe_element node) "disabled" : bool) ->
                       ()
-                  | (`Mouse | `Other), _ -> (
-                      let deliver () =
-                        Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
-                        paced event handle native
-                      in
-                      match tracking with
-                      | `Untracked -> deliver ()
-                      | `Tracking -> (
-                          let element = Dom_api.unsafe_element node in
-                          let now = shown element in
-                          match Js.Undefined.toOption (Dom_api.property element tracked : string Js.undefined) with
-                          | Some before when String.equal before now -> ()
-                          | Some _ | None ->
-                              Dom_api.set_property element tracked now;
-                              deliver ())))
+                  | (`Mouse | `Other), _ -> reach node handle native [@u])
                 (Dom_api.handler node key);
               match Dom_api.cancel_bubble native with
               | true -> ()
@@ -128,9 +113,24 @@ let delegate event =
         | None, _ -> ()
       in
       deliver_with deliveries event deliver;
-      Dom_api.add_document_listener Dom_api.document (match event with "onchange" -> "input" | _ -> event) deliver;
-      (match event with "onchange" -> Dom_api.add_document_listener Dom_api.document "change" deliver | _ -> ());
+      List.iter (fun native -> Dom_api.add_document_listener Dom_api.document native deliver) natives;
       key
+
+let delegate event =
+  delegated event [ event ] (fun [@u] node handle native ->
+      Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
+      paced event handle native)
+
+let delegate_tracked event =
+  delegated event [ "input"; "change" ] (fun [@u] node handle native ->
+      let element = Dom_api.unsafe_element node in
+      let now = shown element in
+      match Js.Undefined.toOption (Dom_api.property element tracked : string Js.undefined) with
+      | Some before when String.equal before now -> ()
+      | Some _ | None ->
+          Dom_api.set_property element tracked now;
+          Dom_api.point_current_target native [%mel.obj { configurable = true; value = node }];
+          paced event handle native)
 
 let segment native slot =
   let natively = Dom_api.event_type native in
