@@ -118,6 +118,7 @@ module Prop = struct
     | Kind [@as "kind"]
     | Label [@as "label"]
     | List [@as "list"]
+    | Loading [@as "loading"]
     | Loop [@as "loop"]
     | Low [@as "low"]
     | Manifest [@as "manifest"]
@@ -635,6 +636,7 @@ let kind (prop : Prop.t) =
   | Kind -> Attribute ("kind", Text)
   | Label -> Attribute ("label", Text)
   | List -> Attribute ("list", Text)
+  | Loading -> Attribute ("loading", Text)
   | Loop -> Attribute ("loop", Flag)
   | Low -> Attribute ("low", Integer)
   | Manifest -> Attribute ("manifest", Text)

@@ -414,7 +414,7 @@ let mapper =
 let structure items =
   let own =
     object
-      inherit Ast_traverse.map
+      inherit Ast_traverse.map as super
 
       method! longident longident =
         match longident with
@@ -422,6 +422,46 @@ let structure items =
             Ldot (Ldot (Lident "Meltea_runtime", runtime), name)
         | Ldot (Lident "Melhole", (("View" | "Served" | "Transition") as runtime)) -> Ldot (Lident "Meltea_runtime", runtime)
         | _ -> longident
+
+      method! expression expression =
+        let expression = super#expression expression in
+        let rec literal (value : expression) =
+          let loc = value.pexp_loc in
+          let cases = List.fold_right (fun case found -> Option.bind found (fun rest -> Option.map (fun pc_rhs -> { case with pc_rhs } :: rest) (literal case.pc_rhs))) in
+          match value.pexp_desc with
+          | Pexp_constant (Pconst_string ("", _, _)) -> Some [%expr None]
+          | Pexp_constant (Pconst_string _) -> Some [%expr Some [%e value]]
+          | Pexp_constraint (inner, _) -> literal inner
+          | Pexp_match (scrutinee, given) -> Option.map (fun given -> { value with pexp_desc = Pexp_match (scrutinee, given) }) (cases given (Some []))
+          | Pexp_ifthenelse (condition, yes, Some no) ->
+              Option.bind (literal yes) (fun yes -> Option.map (fun no -> { value with pexp_desc = Pexp_ifthenelse (condition, yes, Some no) }) (literal no))
+          | Pexp_let (flag, bindings, body) -> Option.map (fun body -> { value with pexp_desc = Pexp_let (flag, bindings, body) }) (literal body)
+          | _ -> None
+        in
+        let classed (value : expression) =
+          match value.pexp_desc with
+          | Pexp_construct ({ txt = Lident "Some"; _ }, Some inner) -> Option.value ~default:value (literal inner)
+          | _ -> value
+        in
+        let class_write (statement : expression) =
+          match statement.pexp_desc with
+          | Pexp_apply
+              ( { pexp_desc = Pexp_ident { txt = Ldot (Ldot (Lident "Meltea_runtime", "View"), ("put_attr" | "write_attr")); _ }; _ },
+                arguments ) ->
+              List.find_map (fun (_, (argument : expression)) -> match argument.pexp_desc with Pexp_constant (Pconst_string ("class", _, _)) -> Some arguments | _ -> None) arguments
+          | _ -> None
+        in
+        match (expression.pexp_desc, !Element.output) with
+        | Pexp_let (Nonrecursive, [ ({ pvb_pat = { ppat_desc = Ppat_var { txt = "__melhole_value"; _ }; _ }; _ } as binding) ], body), Element.Client_only -> (
+            match (match body.pexp_desc with Pexp_sequence (first, _) -> class_write first | _ -> class_write body) with
+            | Some _ -> { expression with pexp_desc = Pexp_let (Nonrecursive, [ { binding with pvb_expr = classed binding.pvb_expr } ], body) }
+            | None -> expression)
+        | Pexp_apply (callee, _), Element.Client_only ->
+            Option.fold ~none:expression
+              ~some:(fun arguments ->
+                { expression with pexp_desc = Pexp_apply (callee, List.map (fun (label, argument) -> (label, classed argument)) arguments) })
+              (class_write expression)
+        | _ -> expression
     end
   in
   own#structure (mapper#structure (Dead.annotate items))

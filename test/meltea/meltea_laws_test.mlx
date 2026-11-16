@@ -337,6 +337,44 @@ let () =
              Program.stop program;
              Program.stop expected))
         [%mel.obj { numRuns = 300 }]);
+    test "a class the view gives as empty is absent, never written as class=\"\", on mount and after any messages" (fun () ->
+      check
+        (property (tapes ~shortest:4 ~longest:60) (fun values ->
+             let tape = tape values in
+             let root = create_element document "div" in
+             let program = Program.sandbox ~init:mark_init ~update:mark_update ~view:mark_view root in
+             let model = ref mark_init in
+             let classes () =
+               List.map
+                 (fun row -> (Array.to_list (attribute_names row), class_name row))
+                 (Array.to_list (nodes (child_nodes (select root "ul"))))
+             in
+             let expected () =
+               List.map
+                 (fun item ->
+                   match !model.chosen with
+                   | Some id when id = item.id -> ([ "class" ], "on")
+                   | Some _ | None -> ([], ""))
+                 !model.rows
+             in
+             expect (classes ()) |. to_equal (expected ());
+             List.iter
+               (fun _ ->
+                 let ids = List.map (fun item -> item.id) !model.rows in
+                 let pick () = List.nth_opt ids (draw tape (max 1 (List.length ids))) in
+                 let message =
+                   match draw tape 3 with
+                   | 0 -> Choose (match draw tape 3 with 0 -> None | _ -> pick ())
+                   | 1 -> Option.fold ~none:Grow ~some:(fun id -> Drop id) (pick ())
+                   | _ -> Grow
+                 in
+                 model := mark_update message !model;
+                 Program.dispatch program message;
+                 Program.flush program;
+                 expect (classes ()) |. to_equal (expected ()))
+               (List.init (Array.length values / 3) Fun.id);
+             Program.stop program))
+        [%mel.obj { numRuns = 200 }]);
     test "rows of Html.array over Array.map show what the same rows of Html.list show, after any messages" (fun () ->
       check
         (property (tapes ~shortest:4 ~longest:60) (fun values ->
