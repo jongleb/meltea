@@ -1,0 +1,84 @@
+open Testing
+
+type model = { rows : int list; next : int; suffix : string }
+
+type message = Add of int | Drop of int | Keep_first of int | Suffix of string
+
+let update message model =
+  match message with
+  | Add count -> { model with rows = model.rows @ List.init count (fun at -> model.next + at); next = model.next + count }
+  | Drop at -> { model with rows = List.filteri (fun index _ -> index <> at) model.rows }
+  | Keep_first count -> { model with rows = List.filteri (fun index _ -> index < count) model.rows }
+  | Suffix suffix -> { model with suffix }
+
+let grouped { rows; suffix; _ } =
+  <div>(Html.grouped (List.map (fun row -> <p key=(string_of_int row)>(Html.text (string_of_int row ^ suffix))</p>) rows))</div>
+
+let whole { rows; suffix; _ } =
+  <div>(Html.list (List.map (fun row -> <p key=(string_of_int row)>(Html.text (string_of_int row ^ suffix))</p>) rows))</div>
+
+let unwrapped : Dom.element -> string =
+  [%mel.raw
+    {|function (root) {
+  const out = [];
+  const walk = (node) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 1 && (child.getAttribute("style") || "").startsWith("content-visibility:auto")) walk(child);
+      else if (child.nodeType === 1) { out.push("<" + child.tagName + ">"); walk(child); out.push("</" + child.tagName + ">"); }
+      else if (child.nodeType === 3 && child.data !== "") out.push(child.data);
+    }
+  };
+  walk(root);
+  return out.join("");
+}|}]
+
+let groups : Dom.element -> int =
+  [%mel.raw {|function (root) { return Array.from(root.querySelectorAll("*")).filter((node) => (node.getAttribute("style") || "").startsWith("content-visibility:auto")).length; }|}]
+
+let rows_of : Dom.element -> Dom.element array = [%mel.raw {|function (root) { return Array.from(root.querySelectorAll("p")); }|}]
+
+let () =
+  describe "Lists grouped for rendering" (fun () ->
+      test
+        "a grouped list shows what the whole list shows after any messages, across its threshold both ways, and a row that stays keeps its node, but on the draw that first groups the list"
+        (fun () ->
+          check
+            (property (tapes ~shortest:1 ~longest:30) (fun values ->
+                 let tape = tape values in
+                 let init = { rows = []; next = 0; suffix = "" } in
+                 let root = attached () and other = attached () in
+                 let program = Program.sandbox ~init ~update ~view:grouped root in
+                 let compared = Program.sandbox ~init ~update ~view:whole other in
+                 let model = ref init and grouping = ref `Whole in
+                 List.iter
+                   (fun _ ->
+                     let message =
+                       match draw tape 5 with
+                       | 0 | 1 -> Add (1 + draw tape 80)
+                       | 2 -> Drop (draw tape 200)
+                       | 3 -> Keep_first (draw tape 150)
+                       | _ -> Suffix (match draw tape 2 with 0 -> "" | _ -> "!")
+                     in
+                     let before = rows_of root in
+                     let kept = match message with Suffix _ | Add _ -> Array.length before | Drop at -> min at (Array.length before) | Keep_first count -> min count (Array.length before) in
+                     Program.dispatch program message;
+                     Program.dispatch compared message;
+                     model := update message !model;
+                     Program.flush program;
+                     Program.flush compared;
+                     let after = rows_of root in
+                     let regrouped = match (!grouping, Array.length after > 100) with `Whole, true -> `Regrouped | _ -> `Same in
+                     (match regrouped with `Regrouped -> grouping := `Grouped | `Same -> ());
+                     expect
+                       ( unwrapped root,
+                         (match (!grouping, Array.length after) with
+                         | `Grouped, 0 | `Whole, _ -> groups root = 0
+                         | `Grouped, _ -> groups root > 0),
+                         match regrouped with
+                         | `Regrouped -> true
+                         | `Same -> Array.for_all2 ( == ) (Array.sub before 0 kept) (Array.sub after 0 kept) )
+                     |. to_equal (unwrapped other, true, true))
+                   (List.init (Array.length values) Fun.id);
+                 Program.stop program;
+                 Program.stop compared))
+            [%mel.obj { numRuns = 150 }]))

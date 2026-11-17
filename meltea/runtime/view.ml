@@ -1972,6 +1972,24 @@ let chunks ~size ~row_height ~tag child =
           current)
         (hosted (Lazy.force chunking) current))
 
+let grouped ~size ~row_height ~tag child =
+  let large () = List.compare_length_with (items child) size > 0 in
+  let whole = lazy (chunks ~size ~row_height ~tag child) in
+  {
+    shape = Single;
+    build =
+      (fun [@u] position ->
+        match large () with
+        | true -> (Lazy.force whole).build position [@u]
+        | false -> child.build position [@u]);
+    patch =
+      (fun [@u] position current ->
+        match (hosted (Lazy.force chunking) current, large ()) with
+        | Some _, _ -> (Lazy.force whole).patch position current [@u]
+        | None, true -> None
+        | None, false -> child.patch position current [@u]);
+  }
+
 let fixed (type frame source item) (source : source) (listed : source -> item array) (template : frame template)
     (root : (frame -> Dom.element)[@u]) (refresh : (frame -> item -> unit)[@u]) project pieces outer selectors =
   let root_of frame = Melhole.Dom_api.to_node (root frame [@u]) in

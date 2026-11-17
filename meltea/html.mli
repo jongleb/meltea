@@ -22,8 +22,15 @@ val keyed : (string * 'msg t) list -> 'msg t
     ["div"]) with [content-visibility: auto] and a height estimate from [row_height] pixels
     (default 40): the browser skips style, layout and paint of the groups out of view. The groups
     change the DOM, so selectors such as [:nth-child] see them; a row that moves to another group is
-    made again. *)
+    made again. A list of no more than [size] rows has no groups. *)
 val chunks : ?size:int -> ?row_height:int -> ?tag:string -> 'msg t list -> 'msg t
+
+(** [chunks] with its defaults once a list has had more than 100 rows, and from then on at any length,
+    so that a list shrinking below never makes its rows again (they are made again once, when the list
+    first passes 100): what [meltea-ppx] makes of a list whose element's declared stylesheets cannot
+    see the groups. *)
+val grouped : 'msg t list -> 'msg t
+
 val transition : name:string -> ?duration:int -> 'msg t -> 'msg t
 val transition_group : name:string -> ?duration:int -> 'msg t -> 'msg t
 val map : ('a -> 'b) -> 'a t -> 'b t

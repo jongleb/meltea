@@ -36,4 +36,10 @@ let key event = event_key event
 let prevent_default event = prevent event
 
 let chunks ?(size = 100) ?(row_height = 40) ?(tag = "div") views dispatch =
-  View.chunks ~size ~row_height ~tag (View.list (List.map (fun view -> view dispatch) views))
+  let children = View.list (List.map (fun view -> view dispatch) views) in
+  match List.compare_length_with views size > 0 with
+  | true -> View.chunks ~size ~row_height ~tag children
+  | false -> children
+
+let grouped views dispatch =
+  View.grouped ~size:100 ~row_height:40 ~tag:"div" (View.list (List.map (fun view -> view dispatch) views))

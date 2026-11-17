@@ -445,6 +445,51 @@ let mapper =
 let structure items =
   let items = Dead.annotate (Splice.structure items) in
   let inert = Dead.inert ~loc:Location.none items in
+  let styles = Styles.read items in
+  let unchunked = ref [] in
+  let classes (value : expression option) =
+    match Option.map (fun (value : expression) -> value.pexp_desc) value with
+    | Some (Pexp_constant (Pconst_string (text, _, _))) ->
+        Some (List.filter (fun name -> String.length name > 0) (String.split_on_char ' ' text))
+    | Some _ -> None
+    | None -> Some []
+  in
+  let chunked ~container (child : expression) =
+    let loc = child.pexp_loc in
+    match child.pexp_desc with
+    | Pexp_apply
+        ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", (("list" | "array") as container_kind)); _ }; _ },
+          [
+            ( Nolabel,
+              ({
+                 pexp_desc =
+                   Pexp_apply
+                     ( { pexp_desc = Pexp_ident { txt = Ldot ((Lident ("List" | "Array") | Ldot (Lident "Stdlib", ("List" | "Array"))), "map"); _ }; _ },
+                       [ (Nolabel, function_); (Nolabel, _) ] );
+                 _;
+               } as mapped) );
+          ] )
+      when not (List.exists (fun attribute -> String.equal attribute.attr_name.txt "meltea.unchunked") child.pexp_attributes) -> (
+        let row =
+          match function_.pexp_desc with
+          | Pexp_function (_, _, Pfunction_body body) -> (
+              match (body.pexp_desc, Element.without_jsx body.pexp_attributes) with
+              | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident tag; _ }; _ }, arguments), Some _ ->
+                  { Styles.tag = Some tag; classes = classes (List.assoc_opt (Labelled "className") arguments) }
+              | _ -> { Styles.tag = None; classes = None })
+          | _ -> { Styles.tag = None; classes = None }
+        in
+        match (styles, Styles.breaking styles ~container ~row) with
+        | Styles.Undeclared, _ -> child
+        | Styles.Declared _, Some (file, selector) ->
+            unchunked := (loc, Printf.sprintf "this list keeps its rows together: the selector %s in %s would see them cut into groups" selector file) :: !unchunked;
+            child
+        | Styles.Declared _, None -> (
+            match container_kind with
+            | "list" -> [%expr Html.grouped [%e mapped]]
+            | _ -> [%expr Html.grouped (Stdlib.Array.to_list [%e mapped])]))
+    | _ -> child
+  in
   let implied =
     object
       inherit Ast_traverse.map as super
@@ -503,6 +548,25 @@ let structure items =
                       Pexp_apply ([%expr Html.prevent_unless], [ (Nolabel, [%expr function [%p pattern] -> ()]); (Nolabel, inner) ]);
                   }
               | _ -> value
+            in
+            let arguments =
+              match (List.mem tag [ "ul"; "ol"; "div"; "section"; "main"; "article"; "aside"; "nav" ], !Element.output) with
+              | false, _ | true, (Element.Hydratable | Element.Server) -> arguments
+              | true, Element.Client_only ->
+                  let container = { Styles.tag = Some tag; classes = classes (given "className") } in
+                  List.map
+                    (fun (label, value) ->
+                      match (label, value.pexp_desc) with
+                      | Labelled "children", _ ->
+                          let rec items (list : expression) =
+                            match list.pexp_desc with
+                            | Pexp_construct (({ txt = Lident "::"; _ } as cons), Some ({ pexp_desc = Pexp_tuple [ head; tail ]; _ } as pair)) ->
+                                { list with pexp_desc = Pexp_construct (cons, Some { pair with pexp_desc = Pexp_tuple [ chunked ~container head; items tail ] }) }
+                            | _ -> list
+                          in
+                          (label, items value)
+                      | _ -> (label, value))
+                    arguments
             in
             {
               expression with
@@ -579,7 +643,26 @@ let structure items =
         | _ -> expression
     end
   in
-  own#structure (mapper#structure (implied#structure items))
+  let items = implied#structure items in
+  let alerts =
+    List.rev_map
+      (fun (loc, text) ->
+        let here = Ast_builder.Default.value_description ~loc ~name:{ txt = "here"; loc } ~type_:[%type: unit] ~prim:[] in
+        let alert =
+          Ast_builder.Default.attribute ~loc ~name:{ txt = "alert"; loc }
+            ~payload:(PStr [ Ast_builder.Default.pstr_eval ~loc (Ast_builder.Default.pexp_apply ~loc (Ast_builder.Default.evar ~loc "chunks") [ (Nolabel, Ast_builder.Default.estring ~loc text) ]) [] ])
+        in
+        [%stri
+          let () =
+            [%e
+              Ast_builder.Default.pexp_letmodule ~loc { txt = Some "Melhole_chunks"; loc }
+                (Ast_builder.Default.pmod_constraint ~loc
+                   (Ast_builder.Default.pmod_structure ~loc [ [%stri let here = ()] ])
+                   (Ast_builder.Default.pmty_signature ~loc [ Ast_builder.Default.psig_value ~loc { here with pval_attributes = [ alert ] } ]))
+                (Ast_builder.Default.pexp_ident ~loc { txt = Ldot (Lident "Melhole_chunks", "here"); loc })]])
+      !unchunked
+  in
+  own#structure (mapper#structure (items @ alerts))
 let () =
   Driver.add_arg "-hydratable"
     (Arg.Unit (fun () -> Element.output := Element.Hydratable))

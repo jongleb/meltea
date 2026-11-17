@@ -101,6 +101,15 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   runs at run time.
 - **Keys.** `Sub.key_down (fun key -> Pressed key)` hears every key pressed on the page while
   `subscriptions` returns it.
+- **Long lists render in view only.** Declare the module's stylesheets with
+  `[@@@meltea.styles "app.css"]` (and the file in the `dune` stanza's `preprocessor_deps`): the
+  compiler reads them at build time, and a list built by `List.map`/`Array.map` inside a `div`,
+  `ul`, `ol`, `section` and the like, once it has passed 100 rows, is cut into groups with
+  `content-visibility: auto`, so the browser lays out and paints only the groups in view. It does
+  so only where no selector of those stylesheets would see the groups (one that counts siblings,
+  like `:last-child`, a `>` from the list's element to a row, or a `+`/`~` between rows); where one
+  would, the list stays whole and the build says which selector. `[@meltea.unchunked]` on the list
+  keeps it whole; `Html.chunks` does it by hand.
 - **Portals.** `Html.portal ~into:"portal" (dialog card)` shows a view inside the element with that
   id, wherever it sits in the page (a dialog over everything else), and in its own place when no
   element has the id. Its handlers send like any other; leaving the view takes its nodes away. A

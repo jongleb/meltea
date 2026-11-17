@@ -326,3 +326,7 @@ val remember : 'value memory -> input array -> (unit -> 'value) -> 'value
     and paint of groups out of view. Rows keep their keys within a group; a row that moves to
     another group is made again there. *)
 val chunks : size:int -> row_height:int -> tag:string -> child -> child
+
+(** [chunks] once a list has more than [size] rows, and from then on at any length; a list that never
+    had more has no groups. *)
+val grouped : size:int -> row_height:int -> tag:string -> child -> child
