@@ -10,7 +10,7 @@ type representation =
   | Unboxed of t  (** One constructor or field, represented as the value it holds. *)
   | Defined  (** A record, a variant or an open type. *)
 
-(** Whether a JavaScript object type lists all of its fields. *)
+(** Whether an object type lists all of its fields. *)
 type row = Closed | Open
 
 (** The outermost shape of a type, after expanding abbreviations. *)
@@ -19,7 +19,8 @@ type view =
   | Named of { path : string; arguments : t list; representation : representation }
       (** [path] from the top, module aliases resolved: [React.element], [Js.dict], [Stdlib__Hashtbl.t]. *)
   | Js_object of { fields : (string * t) list; row : row }  (** [< … > Js.t]; a setter is a field named [name#=]. *)
-  | Other  (** A type variable, a tuple, a polymorphic variant, an OCaml object or a module. *)
+  | Object of { fields : (string * t) list; row : row }  (** [< … >], an OCaml object type. *)
+  | Other  (** A type variable, a tuple, a polymorphic variant or a module. *)
 
 val make : Ocaml_common.Env.t -> Ocaml_common.Types.type_expr -> t
 val view : t -> view

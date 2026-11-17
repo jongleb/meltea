@@ -9,6 +9,7 @@ type view =
   | Function of label * t * t
   | Named of { path : string; arguments : t list; representation : representation }
   | Js_object of { fields : (string * t) list; row : row }
+  | Object of { fields : (string * t) list; row : row }
   | Other
 
 let make env type_expr = { env; type_expr }
@@ -17,7 +18,16 @@ let name env path = Path.name (match Env.normalize_type_path None env path with 
 
 let rec view { env; type_expr } =
   let within type_expr = { env; type_expr } in
-  match Types.get_desc (Ctype.expand_head_opt env type_expr) with
+  let members shape =
+    let listed, rest = Ctype.flatten_fields (Ctype.object_fields shape) in
+    ( List.filter_map
+        (fun (name, kind, field) ->
+          match Types.field_kind_repr kind with Types.Fpublic -> Some (name, within field) | Types.Fabsent | Types.Fprivate -> None)
+        listed,
+      match Types.get_desc rest with Types.Tnil -> Closed | _ -> Open )
+  in
+  let head = Ctype.expand_head_opt env type_expr in
+  match Types.get_desc head with
   | Types.Tarrow (label, parameter, result, _) ->
       Function
         ( (match label with
@@ -31,18 +41,8 @@ let rec view { env; type_expr } =
       let shape = Ctype.expand_head_opt env fields in
       match Types.get_desc shape with
       | Types.Tobject _ ->
-          let listed, rest = Ctype.flatten_fields (Ctype.object_fields shape) in
-          Js_object
-            {
-              fields =
-                List.filter_map
-                  (fun (name, kind, field) ->
-                    match Types.field_kind_repr kind with
-                    | Types.Fpublic -> Some (name, within field)
-                    | Types.Fabsent | Types.Fprivate -> None)
-                  listed;
-              row = (match Types.get_desc rest with Types.Tnil -> Closed | _ -> Open);
-            }
+          let fields, row = members shape in
+          Js_object { fields; row }
       | _ -> Other)
   | Types.Tconstr (path, arguments, _) ->
       let representation =
@@ -59,6 +59,9 @@ let rec view { env; type_expr } =
             | Types.Type_variant _ | Types.Type_record _ | Types.Type_open -> Defined)
       in
       Named { path = name env path; arguments = List.map within arguments; representation }
-  | Types.Tvar _ | Types.Tunivar _ | Types.Ttuple _ | Types.Tvariant _ | Types.Tobject _ | Types.Tfield _ | Types.Tnil
+  | Types.Tobject _ ->
+      let fields, row = members head in
+      Object { fields; row }
+  | Types.Tvar _ | Types.Tunivar _ | Types.Ttuple _ | Types.Tvariant _ | Types.Tfield _ | Types.Tnil
   | Types.Tlink _ | Types.Tsubst _ | Types.Tpoly _ | Types.Tpackage _ | Types.Tfunctor _ ->
       Other

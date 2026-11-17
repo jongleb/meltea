@@ -83,7 +83,7 @@ let of_answer ({ env; type_expr } : Answer.t) =
                      | true -> Mutable_inside
                      | false -> classify seen field.type_expr)
                    fields)
-        | Answer.Function _ | Answer.Named _ | Answer.Other -> Unknown)
+        | Answer.Function _ | Answer.Named _ | Answer.Object _ | Answer.Other -> Unknown)
     | None
       when List.exists (Path.same path) seen
            &&

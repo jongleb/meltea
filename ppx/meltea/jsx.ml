@@ -50,9 +50,16 @@ let mapper =
                     __melhole_dispatch [%e message]]
               | _ -> [%expr __melhole_dispatch [%e message]]
             in
-            match requirement with
-            | `Required -> [%expr (fun __melhole_event -> [%e send value])]
-            | `Optional ->
+            match (requirement, value.pexp_desc) with
+            | ( `Required,
+                Pexp_apply
+                  ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ }; _ }, [ (Nolabel, message) ]) ) ->
+                [%expr
+                  fun __melhole_event ->
+                    Html.prevent_default __melhole_event;
+                    [%e send message]]
+            | `Required, _ -> [%expr (fun __melhole_event -> [%e send value])]
+            | `Optional, _ ->
                 [%expr
                   
                     (fun __melhole_event ->
