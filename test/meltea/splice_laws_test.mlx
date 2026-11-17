@@ -1,0 +1,88 @@
+open Testing
+
+type choice = First | Second | Numbered of int
+
+type model = { chosen : choice; count : int }
+
+type message = Choose of choice | Count
+
+let update message model =
+  match message with Choose chosen -> { model with chosen } | Count -> { model with count = model.count + 1 }
+
+let spliced { chosen; count } =
+  let suffix = "#" ^ string_of_int count and mark = "m" ^ string_of_int count and inner = "outer" in
+  let item label target =
+    <li className=(match chosen = target with true -> "on" | false -> "")>(Html.text (label ^ suffix))</li>
+  in
+  let pair left right = <span title=left>(Html.text right)</span> in
+  let shadowed label = <em>(Html.text (label ^ mark))</em> in
+  let captured name = <b>(Html.text (let inner = "inner " in inner ^ name))</b> in
+  let label = "label" in
+  <div>
+    <ul>(item "a" First) (item "b" Second) (item suffix (Numbered count))</ul>
+    (pair suffix "x")
+    (pair label label)
+    (captured inner)
+    (pair inner "y")
+    (match chosen with
+     | First ->
+         let mark = "!" in
+         <p>(shadowed mark)</p>
+     | Second | Numbered _ -> <p>(shadowed "none")</p>)
+  </div>
+
+let reference { chosen; count } =
+  let suffix = "#" ^ string_of_int count and mark = "m" ^ string_of_int count and inner = "outer" in
+  let item label target =
+    <li className=(match chosen = target with true -> "on" | false -> "")>(Html.text (label ^ suffix))</li>
+  in
+  let pair left right = <span title=left>(Html.text right)</span> in
+  let shadowed label = <em>(Html.text (label ^ mark))</em> in
+  let captured name = <b>(Html.text (let inner = "inner " in inner ^ name))</b> in
+  let label = "label" in
+  <div>
+    <ul>(Html.list [ item "a" First; item "b" Second; item suffix (Numbered count) ])</ul>
+    (Html.list [ pair suffix "x" ])
+    (Html.list [ pair label label ])
+    (Html.list [ captured inner ])
+    (Html.list [ pair inner "y" ])
+    (match chosen with
+     | First ->
+         let mark = "!" in
+         <p>(Html.list [ shadowed mark ])</p>
+     | Second | Numbered _ -> <p>(Html.list [ shadowed "none" ])</p>)
+  </div>
+
+let () =
+  describe "View helpers spliced into the page" (fun () ->
+      test "a view whose helpers are spliced shows what the same view with every helper called shows, after any messages"
+        (fun () ->
+          check
+            (property (tapes ~shortest:2 ~longest:40) (fun values ->
+                 let tape = tape values in
+                 let init = { chosen = First; count = 0 } in
+                 let root = attached () and other = attached () in
+                 let program = Program.sandbox ~init ~update ~view:spliced root in
+                 let compared = Program.sandbox ~init ~update ~view:reference other in
+                 let compare () =
+                   Program.flush program;
+                   Program.flush compared;
+                   expect (shapes (as_node root)) |. to_equal (shapes (as_node other))
+                 in
+                 compare ();
+                 List.iter
+                   (fun _ ->
+                     let message =
+                       match draw tape 4 with
+                       | 0 -> Choose First
+                       | 1 -> Choose Second
+                       | 2 -> Choose (Numbered (draw tape 3))
+                       | _ -> Count
+                     in
+                     Program.dispatch program message;
+                     Program.dispatch compared message;
+                     compare ())
+                   (List.init (Array.length values) Fun.id);
+                 Program.stop program;
+                 Program.stop compared))
+            [%mel.obj { numRuns = 200 }]))

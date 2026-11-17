@@ -464,7 +464,7 @@ let structure items =
         | _ -> expression
     end
   in
-  own#structure (mapper#structure (Dead.annotate items))
+  own#structure (mapper#structure (Dead.annotate (Splice.structure items)))
 let () =
   Driver.add_arg "-hydratable"
     (Arg.Unit (fun () -> Element.output := Element.Hydratable))

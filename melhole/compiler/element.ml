@@ -98,6 +98,12 @@ let rec list_items expression =
       Option.map (fun rest -> head :: rest) (list_items tail)
   | _ -> None
 
+let destructured pattern inner =
+  let loc = pattern.ppat_loc in
+  match pattern.ppat_desc with
+  | Ppat_var _ | Ppat_any -> [%expr let [%p pattern] = __melhole_item in [%e inner]]
+  | _ -> [%expr match __melhole_item with [%p pattern] -> [%e inner]]
+
 let lowercase_call expression =
   match expression.pexp_desc with
   | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident tag; _ }; _ }, arguments) ->
@@ -1288,7 +1294,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
               match (numbering, lambda.pexp_desc) with
               | Items, Pexp_function ([ { pparam_desc = Pparam_val (Nolabel, None, pattern); _ } ], None, Pfunction_body body)
                 ->
-                  Some ((fun inner -> [%expr let [%p pattern] = __melhole_item in [%e inner]]), body, Free.bound pattern)
+                  Some ((fun inner -> destructured pattern inner), body, Free.bound pattern)
               | ( Numbered,
                   Pexp_function
                     ( [
@@ -1298,7 +1304,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                       None,
                       Pfunction_body body ) ) ->
                   Some
-                    ( (fun inner -> [%expr let [%p position] = __melhole_index in let [%p pattern] = __melhole_item in [%e inner]]),
+                    ( (fun inner -> [%expr let [%p position] = __melhole_index in [%e destructured pattern inner]]),
                       body,
                       Free.bound position @ Free.bound pattern )
               | (Items | Numbered), _ -> None
@@ -1456,7 +1462,7 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                     in
                     Option.map
                       (fun (pattern, rebuild, (template, root, parameters, refreshing, key)) ->
-                        let given body = [%expr (let [%p pattern] = __melhole_item in [%e rebuild body]) [@ocaml.warning "-26-27"]] in
+                        let given body = [%expr [%e destructured pattern (rebuild body)] [@ocaml.warning "-26-27"]] in
                         let keyed =
                           match key with
                           | [%expr (string_of_int [%e? number] : string)] | [%expr string_of_int [%e? number]] ->
@@ -1488,6 +1494,23 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
       match compiled_rows with
       | Some rows -> Some rows
       | None ->
+          let called lambda arguments =
+            match lambda.pexp_desc with
+            | Pexp_function (params, None, Pfunction_body body) -> (
+                let patterns =
+                  List.filter_map
+                    (fun param -> match param.pparam_desc with Pparam_val (Nolabel, None, pattern) -> Some pattern | _ -> None)
+                    params
+                in
+                match (List.compare_lengths patterns params, List.compare_lengths patterns arguments) with
+                | 0, 0 ->
+                    let matched =
+                      List.fold_right2 (fun pattern argument body -> [%expr match [%e argument] with [%p pattern] -> [%e body]]) patterns arguments body
+                    in
+                    { matched with pexp_attributes = lambda.pexp_attributes @ matched.pexp_attributes }
+                | _ -> pexp_apply ~loc lambda (List.map (fun argument -> (Nolabel, argument)) arguments))
+            | _ -> pexp_apply ~loc lambda (List.map (fun argument -> (Nolabel, argument)) arguments)
+          in
           Some
             [%expr
               Melhole.View.each
@@ -1500,11 +1523,11 @@ let loop frontend ~loc ~definitions ~view ~stable ~render ~numbering row items =
                       ( { txt = Ldot (Ldot (Lident "Js", "Fn"), "I2"); loc },
                         match numbering with
                         | Items ->
-                            [%expr fun __melhole_item _ -> [%e render [%expr [%e frontend.map row] __melhole_item]]]
+                            [%expr fun __melhole_item _ -> [%e render (called (frontend.map row) [ [%expr __melhole_item] ])]]
                         | Numbered ->
                             [%expr
                               fun __melhole_item __melhole_index ->
-                                [%e render [%expr [%e frontend.map row] __melhole_index __melhole_item]]] );
+                                [%e render (called (frontend.map row) [ [%expr __melhole_index]; [%expr __melhole_item] ])]] );
                     ]
                     None]
                 [%e project] [%e pieces] [%e outer] [%e selectors]]
