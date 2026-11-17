@@ -36,12 +36,19 @@ let view { kept; prevented; keys; heard } =
     <div id="target" onDrop=(Hear "d")>(Html.text heard)</div>
     <div id="entered" onDrop=(Hear "e") onDragEnter=(Hear "x")>(Html.text "entered")</div>
     <div id="dragged" onDragOver=(Hear "o")>(Html.text "dragged")</div>
+    <div id="outer" onClick=(Hear "u")>
+      <button id="stopped" onClick=(Html.stop (Hear "s"))>(Html.text "stopped")</button>
+      <button id="through" onClick=(Hear "t")>(Html.text "through")</button>
+      <a id="both" href="#both" onClick=(Html.prevent (Html.stop (Hear "b")))>(Html.text "both")</a>
+      <button id="silent" onClick=Html.stop>(Html.text "silent")</button>
+    </div>
+    <a id="mute" href="#mute" onClick=Html.prevent>(Html.text "mute")</a>
   </div>
 
 let () =
   describe "Handlers that prevent the default action" (fun () ->
       test
-        "a handler given as Html.prevent, a click on a link to #, and drop, dragenter and dragover on an element that takes drops cancel their event and send the message they are given; any other handler leaves the default action, after any events"
+        "a handler given as Html.prevent, a click on a link to #, and drop, dragenter and dragover on an element that takes drops cancel their event and send the message they are given, any other handler leaves the default action, and a handler given as Html.stop keeps the event from the handlers around it; bare, Html.prevent and Html.stop send nothing, after any events"
         (fun () ->
           check
             (property (tapes ~shortest:1 ~longest:30) (fun values ->
@@ -57,7 +64,7 @@ let () =
                  List.iter
                    (fun _ ->
                      let expected, happened =
-                       match draw tape 10 with
+                       match draw tape 15 with
                        | 0 ->
                            sent := update Keep !sent;
                            ( Default_kept,
@@ -83,6 +90,17 @@ let () =
                        | 8 ->
                            sent := update (Hear "o") !sent;
                            (Default_kept, drag "#dragged" "dragover")
+                       | 9 ->
+                           sent := update (Hear "s") !sent;
+                           (Default_kept, outcome (select root "#stopped") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]))
+                       | 10 ->
+                           sent := update (Hear "u") (update (Hear "t") !sent);
+                           (Default_kept, outcome (select root "#through") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]))
+                       | 11 ->
+                           sent := update (Hear "b") !sent;
+                           (Default_prevented, outcome (select root "#both") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]))
+                       | 12 -> (Default_kept, outcome (select root "#silent") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]))
+                       | 13 -> (Default_prevented, outcome (select root "#mute") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]))
                        | _ ->
                            let key = match draw tape 2 with 0 -> "a" | _ -> "b" in
                            sent := update (Press key) !sent;

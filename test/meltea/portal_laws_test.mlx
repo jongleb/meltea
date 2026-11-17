@@ -1,0 +1,110 @@
+open Testing
+
+external set_id : Dom.element -> string -> unit = "id" [@@mel.set]
+external remove : Dom.element -> unit = "remove" [@@mel.send]
+
+(** Which of two elements outside the root a dialog is shown in, or an id no element has. *)
+type target = First | Second | Missing
+
+(** A dialog shown elsewhere in the page, or none. *)
+type dialog = Closed | Showing of string
+
+(** Whether the dialog's place comes before its sibling's or after. *)
+type order = Dialog_first | Sibling_first
+
+type model = { dialog : dialog; into : target; count : int; order : order }
+
+type message = Show of string | Close | Move | Count | Swap
+
+let update message model =
+  match message with
+  | Show title -> { model with dialog = Showing title }
+  | Close -> { model with dialog = Closed }
+  | Move -> { model with into = (match model.into with First -> Second | Second -> Missing | Missing -> First) }
+  | Count -> { model with count = model.count + 1 }
+  | Swap -> { model with order = (match model.order with Dialog_first -> Sibling_first | Sibling_first -> Dialog_first) }
+
+let named target = match target with First -> "portal-first" | Second -> "portal-second" | Missing -> "portal-missing"
+
+let dialog title count = <div className="dialog"><b>(Html.text title)</b><button onClick=Count>(Html.int count)</button></div>
+
+let ordered order placed =
+  Html.keyed
+    (match order with
+    | Dialog_first -> [ ("dialog", placed); ("sibling", <i>(Html.text "sibling")</i>) ]
+    | Sibling_first -> [ ("sibling", <i>(Html.text "sibling")</i>); ("dialog", placed) ])
+
+let shown { dialog = shown; into; count; order } =
+  <div>
+    <p>(Html.int count)</p>
+    (ordered order
+       (match shown with Closed -> Html.none | Showing title -> Html.portal ~into:(named into) (dialog title count)))
+  </div>
+
+let inline { dialog = shown; into; count; order } =
+  <div>
+    <p>(Html.int count)</p>
+    (ordered order
+       (match (shown, into) with Showing title, Missing -> dialog title count | Showing _, (First | Second) | Closed, _ -> Html.none))
+  </div>
+
+let () =
+  describe "Portals" (fun () ->
+      test
+        "after any messages, a portal shows its view inside its target and nothing else, the root shows the view without it wherever the portal moves among its siblings, or with it in its place when no element has the id, its handlers send, and a stopped program leaves both targets empty"
+        (fun () ->
+          check
+            (property (tapes ~shortest:1 ~longest:40) (fun values ->
+                 let tape = tape values in
+                 let first = attached () and second = attached () in
+                 set_id first (named First);
+                 set_id second (named Second);
+                 let root = attached () and other = attached () in
+                 let init = { dialog = Closed; into = First; count = 0; order = Dialog_first } in
+                 let program = Program.sandbox ~init ~update ~view:shown root in
+                 let compared = Program.sandbox ~init ~update ~view:inline other in
+                 let model = ref init in
+                 let compare () =
+                   Program.flush program;
+                   Program.flush compared;
+                   let inside target =
+                     match (!model.dialog, !model.into = target) with
+                     | Showing title, true ->
+                         let shown = attached () in
+                         let mounted = Program.sandbox ~init:!model.count ~update:(fun _ count -> count) ~view:(dialog title) shown in
+                         let markup = inner_html shown in
+                         Program.stop mounted;
+                         markup
+                     | Showing _, false | Closed, _ -> ""
+                   in
+                   expect (shapes (as_node root), inner_html first, inner_html second)
+                   |. to_equal (shapes (as_node other), inside First, inside Second)
+                 in
+                 compare ();
+                 List.iter
+                   (fun _ ->
+                     let message =
+                       match draw tape 6 with
+                       | 0 -> Show (match draw tape 2 with 0 -> "a" | _ -> "b")
+                       | 1 -> Close
+                       | 2 -> Move
+                       | 3 -> Swap
+                       | _ -> Count
+                     in
+                     (match (message, !model.dialog) with
+                     | Count, Showing _ ->
+                         click (select (match !model.into with First -> first | Second -> second | Missing -> root) "button");
+                         Program.dispatch compared Count
+                     | _ ->
+                         Program.dispatch program message;
+                         Program.dispatch compared message);
+                     model := update message !model;
+                     compare ())
+                   (List.init (Array.length values) Fun.id);
+                 Program.stop program;
+                 Program.stop compared;
+                 let left = (inner_html first, inner_html second) in
+                 remove first;
+                 remove second;
+                 expect left |. to_equal ("", "")))
+            [%mel.obj { numRuns = 200 }]))

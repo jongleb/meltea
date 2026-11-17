@@ -7,3 +7,4 @@ val batch : 'msg t list -> 'msg t
 val map : ('a -> 'b) -> 'a t -> 'b t
 val every : int -> (float -> 'msg) -> 'msg t
 val hash : (string -> 'msg) -> 'msg t
+val key_down : (string -> 'msg) -> 'msg t

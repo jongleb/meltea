@@ -51,16 +51,24 @@ let mapper =
               | _ -> [%expr __melhole_dispatch [%e message]]
             in
             match (requirement, value.pexp_desc) with
-            | `Required, Pexp_ident { txt = Lident "__melhole_cancelled"; _ } ->
-                [%expr fun __melhole_event -> Html.prevent_default __melhole_event]
-            | ( `Required,
-                Pexp_apply
-                  ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ }; _ }, [ (Nolabel, message) ]) ) ->
-                [%expr
-                  fun __melhole_event ->
-                    Html.prevent_default __melhole_event;
-                    [%e send message]]
-            | `Required, _ -> [%expr (fun __melhole_event -> [%e send value])]
+            | `Required, _ ->
+                let action wrapper =
+                  match wrapper with
+                  | "prevent" -> [%expr Html.prevent_default __melhole_event]
+                  | _ -> [%expr Html.stop_propagation __melhole_event]
+                in
+                let rec peeled value =
+                  match value.pexp_desc with
+                  | Pexp_ident { txt = Ldot (Lident "Html", (("prevent" | "stop") as wrapper)); _ } -> action wrapper
+                  | Pexp_apply
+                      ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", (("prevent" | "stop") as wrapper)); _ }; _ },
+                        [ (Nolabel, inner) ] ) ->
+                      [%expr
+                        [%e action wrapper];
+                        [%e peeled inner]]
+                  | _ -> send value
+                in
+                [%expr fun __melhole_event -> [%e peeled value]]
             | `Optional, _ ->
                 [%expr
                   
@@ -434,7 +442,7 @@ let structure items =
             let prevented value =
               match value.pexp_desc with
               | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ }; _ }, _)
-              | Pexp_ident { txt = Lident "__melhole_cancelled"; _ } ->
+              | Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ } ->
                   value
               | _ -> { value with pexp_desc = Pexp_apply ([%expr Html.prevent], [ (Nolabel, value) ]) }
             in
@@ -458,7 +466,7 @@ let structure items =
                     @ List.filter_map
                         (fun name ->
                           Option.fold
-                            ~none:(Some (Labelled name, [%expr __melhole_cancelled]))
+                            ~none:(Some (Labelled name, [%expr Html.prevent]))
                             ~some:(fun _ -> None) (given name))
                         dropped );
             }

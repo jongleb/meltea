@@ -27,8 +27,12 @@ val chunks : ?size:int -> ?row_height:int -> ?tag:string -> 'msg t list -> 'msg 
 val transition : name:string -> ?duration:int -> 'msg t -> 'msg t
 val transition_group : name:string -> ?duration:int -> 'msg t -> 'msg t
 val map : ('a -> 'b) -> 'a t -> 'b t
+
+(** Shows a view inside the element whose id is [into], wherever this sits in the page. *)
+val portal : into:string -> 'msg t -> 'msg t
 val memo : ('model -> 'msg t) -> 'model -> 'msg t
 val target_value : Dom.event -> string
 val target_checked : Dom.event -> bool
 val key : Dom.event -> string
 val prevent_default : Dom.event -> unit
+external stop_propagation : Dom.event -> unit = "stopPropagation" [@@mel.send]
