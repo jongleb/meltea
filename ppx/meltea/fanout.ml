@@ -228,33 +228,39 @@ let annotate items =
                       (String.concat ", " shared) handler.event ))
           (handlers ~messages items)
       in
-      let marker =
-        object
-          inherit Ast_traverse.map as super
+      let silenced = Hashtbl.create 8 in
+      (object
+         inherit Ast_traverse.iter as super
 
-          method! expression expression =
-            match List.assoc_opt expression.pexp_loc alerts with
-            | Some text ->
-                let loc = expression.pexp_loc in
-                let here = value_description ~loc ~name:{ txt = "here"; loc } ~type_:[%type: unit] ~prim:[] in
-                let alert =
-                  attribute ~loc ~name:{ txt = "alert"; loc }
-                    ~payload:(PStr [ pstr_eval ~loc (pexp_apply ~loc (evar ~loc "fanout") [ (Nolabel, estring ~loc text) ]) [] ])
-                in
-                {
-                  (pexp_letmodule ~loc
-                     { txt = Some "Melhole_fanout"; loc }
-                     (pmod_constraint ~loc
-                        (pmod_structure ~loc [ [%stri let here = ()] ])
-                        (pmty_signature ~loc [ psig_value ~loc { here with pval_attributes = [ alert ] } ]))
-                     (pexp_sequence ~loc
-                        (pexp_ident ~loc { txt = Ldot (Lident "Melhole_fanout", "here"); loc })
-                        (super#expression { expression with pexp_attributes = [] })))
-                  with
-                  pexp_attributes = expression.pexp_attributes;
-                }
-            | None -> super#expression expression
-        end
-      in
-      marker#structure items
+         method! expression expression =
+           (match List.assoc_opt expression.pexp_loc alerts with
+           | Some _ ->
+               Hashtbl.replace silenced expression.pexp_loc
+                 (List.filter
+                    (fun attribute -> List.mem attribute.attr_name.txt [ "alert"; "ocaml.alert" ])
+                    expression.pexp_attributes)
+           | None -> ());
+           super#expression expression
+       end)
+        #structure items;
+      items
+      @ List.map
+          (fun (loc, text) ->
+            let here = value_description ~loc ~name:{ txt = "here"; loc } ~type_:[%type: unit] ~prim:[] in
+            let alert =
+              attribute ~loc ~name:{ txt = "alert"; loc }
+                ~payload:(PStr [ pstr_eval ~loc (pexp_apply ~loc (evar ~loc "fanout") [ (Nolabel, estring ~loc text) ]) [] ])
+            in
+            [%stri
+              let () =
+                [%e
+                  pexp_letmodule ~loc { txt = Some "Melhole_fanout"; loc }
+                    (pmod_constraint ~loc
+                       (pmod_structure ~loc [ [%stri let here = ()] ])
+                       (pmty_signature ~loc [ psig_value ~loc { here with pval_attributes = [ alert ] } ]))
+                    {
+                      (pexp_ident ~loc { txt = Ldot (Lident "Melhole_fanout", "here"); loc }) with
+                      pexp_attributes = Option.value ~default:[] (Hashtbl.find_opt silenced loc);
+                    }]])
+          alerts
   | _ -> items

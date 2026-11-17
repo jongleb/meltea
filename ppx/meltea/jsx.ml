@@ -60,8 +60,6 @@ let mapper =
                 in
                 let rec peeled value =
                   match value.pexp_desc with
-                  | Pexp_letmodule (name, alerted, ({ pexp_desc = Pexp_sequence (here, inner); _ } as sequence)) ->
-                      { value with pexp_desc = Pexp_letmodule (name, alerted, { sequence with pexp_desc = Pexp_sequence (here, peeled inner) }) }
                   | Pexp_ident { txt = Ldot (Lident "Html", (("prevent" | "stop") as wrapper)); _ } -> action wrapper
                   | Pexp_apply
                       ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", (("prevent" | "stop") as wrapper)); _ }; _ },
