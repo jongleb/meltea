@@ -17,7 +17,7 @@ type outcome = Default_kept | Default_prevented
 
 type model = { kept : int; prevented : int; keys : string; heard : string }
 
-type message = Keep | Prevent | Press of string | Hear of string
+type message = Keep | Prevent | Press of string | Hear of string | Ignore
 
 let update message model =
   match message with
@@ -25,13 +25,14 @@ let update message model =
   | Prevent -> { model with prevented = model.prevented + 1 }
   | Press key -> { model with keys = model.keys ^ key }
   | Hear name -> { model with heard = model.heard ^ name }
+  | Ignore -> model
 
 let view { kept; prevented; keys; heard } =
   <div>
     <a id="kept" href="#kept" onClick=Keep>(Html.int kept)</a>
     <a id="prevented" href="#prevented" onClick=(Html.prevent Prevent)>(Html.int prevented)</a>
     <a id="nowhere" href="#" onClick=(Hear "n")>(Html.text "nowhere")</a>
-    <input id="keys" onKeyDown=(Html.prevent (fun key -> Press key)) />
+    <input id="keys" onKeyDown=(Html.prevent (fun key -> match key with "a" -> Press key | _ -> Ignore)) />
     <span id="typed">(Html.text keys)</span>
     <div id="target" onDrop=(Hear "d")>(Html.text heard)</div>
     <div id="entered" onDrop=(Hear "e") onDragEnter=(Hear "x")>(Html.text "entered")</div>
@@ -48,7 +49,7 @@ let view { kept; prevented; keys; heard } =
 let () =
   describe "Handlers that prevent the default action" (fun () ->
       test
-        "a handler given as Html.prevent, a click on a link to #, and drop, dragenter and dragover on an element that takes drops cancel their event and send the message they are given, any other handler leaves the default action, and a handler given as Html.stop keeps the event from the handlers around it; bare, Html.prevent and Html.stop send nothing, after any events"
+        "a handler given as Html.prevent, a click on a link to #, and drop, dragenter and dragover on an element that takes drops cancel their event and send the message they are given, any other handler leaves the default action, and a handler given as Html.stop keeps the event from the handlers around it; bare, Html.prevent and Html.stop send nothing; around a function, Html.prevent cancels only the events whose message does something, after any events"
         (fun () ->
           check
             (property (tapes ~shortest:1 ~longest:30) (fun values ->
@@ -64,7 +65,7 @@ let () =
                  List.iter
                    (fun _ ->
                      let expected, happened =
-                       match draw tape 15 with
+                       match draw tape 16 with
                        | 0 ->
                            sent := update Keep !sent;
                            ( Default_kept,
@@ -101,8 +102,12 @@ let () =
                            (Default_prevented, outcome (select root "#both") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]))
                        | 12 -> (Default_kept, outcome (select root "#silent") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]))
                        | 13 -> (Default_prevented, outcome (select root "#mute") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]))
+                       | 14 ->
+                           ( Default_kept,
+                             outcome (select root "#keys")
+                               (keyboard_event "keydown" [%mel.obj { key = "b"; bubbles = true; cancelable = true }]) )
                        | _ ->
-                           let key = match draw tape 2 with 0 -> "a" | _ -> "b" in
+                           let key = "a" in
                            sent := update (Press key) !sent;
                            ( Default_prevented,
                              outcome (select root "#keys")

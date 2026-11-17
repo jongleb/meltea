@@ -91,7 +91,10 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   form's submission, `onClick` on `<a href="#">` the jump to the top, and an element with `onDrop`
   takes drops, so its `drop`, `dragenter` and `dragover` are cancelled (the last two with no
   message when it gives none, which is what lets a browser drop there). Anywhere else
-  `onKeyDown=(Html.prevent (fun key -> Press key))` cancels the event and still sends, and
+  `onKeyDown=(Html.prevent (fun key -> Press key))` cancels the event and still sends (around a
+  function, only the events whose message does something: a key that becomes `Ignore`, whose
+  branch of `update` leaves the model as it is, keeps its default, so typing in a field inside
+  still types), and
   `onClick=Html.stop` keeps a click inside a dialog from its backdrop's `onClick` (bare, `Html.stop`
   and `Html.prevent` send nothing); the
   compiler writes `preventDefault` and `stopPropagation` into the handler, so nothing of either

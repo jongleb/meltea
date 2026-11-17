@@ -73,5 +73,5 @@ let () =
            | Melhole_typed.Mode.Untyped -> structure
            | Melhole_typed.Mode.Typed ->
                Option.fold ~none:structure
-                 ~some:(fun file -> Facts.structure file structure @ check file structure)
+                 ~some:(fun file -> Unraised.structure file (Facts.structure file structure) @ check file structure)
                  (Melhole_typed.File.of_structure structure)))

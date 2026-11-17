@@ -6,3 +6,7 @@
 
 (** The module's structure, with an alert at every dead message and every dead handler. *)
 val annotate : Ppxlib.structure -> Ppxlib.structure
+
+(** The messages whose branch of the module's [update] leaves the model as it is and runs no command,
+    as one pattern, if there are any. *)
+val inert : loc:Ppxlib.location -> Ppxlib.structure -> Ppxlib.pattern option

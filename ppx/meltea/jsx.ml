@@ -36,19 +36,20 @@ let mapper =
         throwing = Element.Stops;
         handler =
           (fun loc { label; requirement; value; _ } ->
+            let computed message =
+              match label with
+              | "onInput" | "onChange" -> [%expr [%e message] (Html.target_value __melhole_event)]
+              | "onCheck" -> [%expr [%e message] (Html.target_checked __melhole_event)]
+              | "onKeyDown" | "onKeyUp" | "onKeyPress" -> [%expr [%e message] (Html.key __melhole_event)]
+              | _ -> message
+            in
             let send message =
               match label with
-              | "onInput" | "onChange" ->
-                  [%expr __melhole_dispatch ([%e message] (Html.target_value __melhole_event))]
-              | "onCheck" ->
-                  [%expr __melhole_dispatch ([%e message] (Html.target_checked __melhole_event))]
-              | "onKeyDown" | "onKeyUp" | "onKeyPress" ->
-                  [%expr __melhole_dispatch ([%e message] (Html.key __melhole_event))]
               | "onSubmit" ->
                   [%expr
                     Html.prevent_default __melhole_event;
-                    __melhole_dispatch [%e message]]
-              | _ -> [%expr __melhole_dispatch [%e message]]
+                    __melhole_dispatch [%e computed message]]
+              | _ -> [%expr __melhole_dispatch [%e computed message]]
             in
             match (requirement, value.pexp_desc) with
             | `Required, _ ->
@@ -59,6 +60,8 @@ let mapper =
                 in
                 let rec peeled value =
                   match value.pexp_desc with
+                  | Pexp_letmodule (name, alerted, ({ pexp_desc = Pexp_sequence (here, inner); _ } as sequence)) ->
+                      { value with pexp_desc = Pexp_letmodule (name, alerted, { sequence with pexp_desc = Pexp_sequence (here, peeled inner) }) }
                   | Pexp_ident { txt = Ldot (Lident "Html", (("prevent" | "stop") as wrapper)); _ } -> action wrapper
                   | Pexp_apply
                       ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", (("prevent" | "stop") as wrapper)); _ }; _ },
@@ -66,6 +69,19 @@ let mapper =
                       [%expr
                         [%e action wrapper];
                         [%e peeled inner]]
+                  | Pexp_apply
+                      ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent_unless"); _ }; _ },
+                        [
+                          ( Nolabel,
+                            { pexp_desc = Pexp_function ([], None, Pfunction_cases ([ { pc_lhs = inert; _ } ], _, _)); _ } );
+                          (Nolabel, inner);
+                        ] ) ->
+                      [%expr
+                        let __melhole_message = [%e computed inner] in
+                        ((match __melhole_message with
+                         | [%p inert] -> ()
+                         | _ -> Html.prevent_default __melhole_event) [@ocaml.warning "-4-11-40-41-42"]);
+                        __melhole_dispatch __melhole_message]
                   | _ -> send value
                 in
                 [%expr fun __melhole_event -> [%e peeled value]]
@@ -429,6 +445,8 @@ let mapper =
   end
 
 let structure items =
+  let items = Dead.annotate (Splice.structure items) in
+  let inert = Dead.inert ~loc:Location.none items in
   let implied =
     object
       inherit Ast_traverse.map as super
@@ -444,7 +462,9 @@ let structure items =
               | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ }; _ }, _)
               | Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ } ->
                   value
-              | _ -> { value with pexp_desc = Pexp_apply ([%expr Html.prevent], [ (Nolabel, value) ]) }
+              | _ ->
+                  let loc = { value.pexp_loc with loc_ghost = true } in
+                  { value with pexp_desc = Pexp_apply ([%expr Html.prevent], [ (Nolabel, value) ]) }
             in
             let nowhere =
               match (tag, Option.map (fun href -> href.pexp_desc) (given "href")) with
@@ -452,6 +472,40 @@ let structure items =
               | _ -> []
             in
             let dropped = Option.fold ~none:[] ~some:(fun _ -> [ "onDrop"; "onDragEnter"; "onDragOver" ]) (given "onDrop") in
+            let rec judged value =
+              match (value.pexp_desc, inert) with
+              | Pexp_apply (({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "stop"); _ }; _ } as stop), [ (Nolabel, inner) ]), _ ->
+                  { value with pexp_desc = Pexp_apply (stop, [ (Nolabel, judged inner) ]) }
+              | ( Pexp_apply
+                    ( ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ }; _ } as prevent),
+                      [
+                        ( Nolabel,
+                          {
+                            pexp_desc =
+                              Pexp_apply
+                                (({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "stop"); _ }; _ } as stop), [ (Nolabel, inner) ]);
+                            _;
+                          } );
+                      ] ),
+                  _ ) ->
+                  judged
+                    {
+                      value with
+                      pexp_desc =
+                        Pexp_apply (stop, [ (Nolabel, { value with pexp_desc = Pexp_apply (prevent, [ (Nolabel, inner) ]) }) ]);
+                    }
+              | ( Pexp_apply
+                    ( { pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ }; _ },
+                      [ (Nolabel, ({ pexp_desc = Pexp_function _ | Pexp_ident _ | Pexp_apply _ | Pexp_match _ | Pexp_ifthenelse _; _ } as inner)) ] ),
+                  Some pattern ) ->
+                  let loc = { value.pexp_loc with loc_ghost = true } in
+                  {
+                    value with
+                    pexp_desc =
+                      Pexp_apply ([%expr Html.prevent_unless], [ (Nolabel, [%expr function [%p pattern] -> ()]); (Nolabel, inner) ]);
+                  }
+              | _ -> value
+            in
             {
               expression with
               pexp_desc =
@@ -460,7 +514,9 @@ let structure items =
                     List.map
                       (fun (label, value) ->
                         match label with
-                        | Labelled name when List.mem name (nowhere @ dropped) -> (label, prevented value)
+                        | Labelled name when List.mem name (nowhere @ dropped) -> (label, judged (prevented value))
+                        | Labelled name when String.length name > 2 && String.equal (String.sub name 0 2) "on" ->
+                            (label, judged value)
                         | _ -> (label, value))
                       arguments
                     @ List.filter_map
@@ -525,7 +581,7 @@ let structure items =
         | _ -> expression
     end
   in
-  own#structure (mapper#structure (implied#structure (Dead.annotate (Splice.structure items))))
+  own#structure (mapper#structure (implied#structure items))
 let () =
   Driver.add_arg "-hydratable"
     (Arg.Unit (fun () -> Element.output := Element.Hydratable))
