@@ -9,13 +9,20 @@ external remove_listener : string -> (Dom.event -> unit) -> unit = "removeEventL
 [@@mel.scope "window"]
 
 external hash_of_location : string = "hash" [@@mel.scope "window", "location"]
+external key_of : Dom.event -> string = "key" [@@mel.get]
 
 (** Where events come from, typed by the value each event carries. *)
-type 'event source = Interval : int -> float source | Hash : string source
+type 'event source = Interval : int -> float source | Hash : string source | Key_down : string source
 
-(** One thing to listen to, and the message each of its events becomes. *)
+(** One thing to listen to, how to start listening (giving back how to stop), and the message each
+    of its events becomes. *)
 type 'msg subscription =
-  | Subscription : { source : 'event source; tag : 'event -> 'msg } -> 'msg subscription
+  | Subscription : {
+      source : 'event source;
+      listen : ('event -> unit) -> unit -> unit;
+      tag : 'event -> 'msg;
+    }
+      -> 'msg subscription
 
 type 'msg t = Subscriptions of 'msg subscription list [@@unboxed]
 
@@ -42,12 +49,53 @@ let batch subscriptions =
 let map change (Subscriptions list) =
   Subscriptions
     (List.map
-       (fun (Subscription { source; tag }) ->
-         Subscription { source; tag = (fun event -> change (tag event)) })
+       (fun (Subscription { source; listen; tag }) ->
+         Subscription { source; listen; tag = (fun event -> change (tag event)) })
        list)
 
-let every interval tag = Subscriptions [ Subscription { source = Interval interval; tag } ]
-let hash tag = Subscriptions [ Subscription { source = Hash; tag } ]
+let every interval tag =
+  Subscriptions
+    [
+      Subscription
+        {
+          source = Interval interval;
+          listen =
+            (fun deliver ->
+              let handle = set_interval (fun () -> deliver (now ())) interval in
+              fun () -> clear_interval handle);
+          tag;
+        };
+    ]
+
+let hash tag =
+  Subscriptions
+    [
+      Subscription
+        {
+          source = Hash;
+          listen =
+            (fun deliver ->
+              let listener _ = deliver hash_of_location in
+              add_listener "hashchange" listener;
+              fun () -> remove_listener "hashchange" listener);
+          tag;
+        };
+    ]
+
+let key_down tag =
+  Subscriptions
+    [
+      Subscription
+        {
+          source = Key_down;
+          listen =
+            (fun deliver ->
+              let listener event = deliver (key_of event) in
+              add_listener "keydown" listener;
+              fun () -> remove_listener "keydown" listener);
+          tag;
+        };
+    ]
 let activate () = { running = []; sink = ignore }
 
 let same_source : type a b. a source -> b source -> (a, b) same option =
@@ -55,7 +103,8 @@ let same_source : type a b. a source -> b source -> (a, b) same option =
   match (first, second) with
   | Interval one, Interval other when one = other -> Some Same
   | Hash, Hash -> Some Same
-  | Interval _, _ | Hash, _ -> None
+  | Key_down, Key_down -> Some Same
+  | Interval _, _ | Hash, _ | Key_down, _ -> None
 
 let apply active (Subscriptions list) dispatch =
   active.sink <- dispatch;
@@ -70,24 +119,13 @@ let apply active (Subscriptions list) dispatch =
           subscription ))
       list
   in
-  let start : type event. event source -> int -> (event -> _) -> _ running =
-   fun source rank tag ->
+  let start source listen rank tag =
     let current = ref tag in
-    let stop =
-      match source with
-      | Interval interval ->
-          let handle = set_interval (fun () -> active.sink (!current (now ()))) interval in
-          fun () -> clear_interval handle
-      | Hash ->
-          let listener _ = active.sink (!current hash_of_location) in
-          add_listener "hashchange" listener;
-          fun () -> remove_listener "hashchange" listener
-    in
-    Running { source; rank; tag = current; stop }
+    Running { source; rank; tag = current; stop = listen (fun event -> active.sink (!current event)) }
   in
   let renewed =
     List.map
-      (fun (rank, Subscription { source; tag }) ->
+      (fun (rank, Subscription { source; listen; tag }) ->
         match
           List.find_map
             (fun (Running running as found) ->
@@ -99,7 +137,7 @@ let apply active (Subscriptions list) dispatch =
             active.running
         with
         | Some found -> found
-        | None -> start source rank tag)
+        | None -> start source listen rank tag)
       wanted
   in
   List.iter

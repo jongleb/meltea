@@ -87,8 +87,14 @@ let () = Option.iter (fun root -> ignore (Program.sandbox ~init:0 ~update ~view 
   again only when its item is another object or a piece of it that reads outer values changed.
 - **Events.** `onClick=Increment` sends a message. `onInput` and `onKeyDown` take a function of
   the value or the key, `onCheck` of the checked state. Handlers are delegated to `document`.
-  `onClick=(Html.prevent (Show filter))` also cancels the browser's own action (following a
-  link, here); the compiler writes the `preventDefault` into the handler. `onSubmit` always does.
+  What an element means decides what its handlers cancel, at build time: `onSubmit` cancels the
+  form's submission, `onClick` on `<a href="#">` the jump to the top, and an element with `onDrop`
+  takes drops, so its `drop`, `dragenter` and `dragover` are cancelled (the last two with no
+  message when it gives none, which is what lets a browser drop there). Anywhere else
+  `onKeyDown=(Html.prevent (fun key -> Press key))` cancels the event and still sends; the
+  compiler writes the `preventDefault` into the handler, so nothing of it runs at run time.
+- **Keys.** `Sub.key_down (fun key -> Pressed key)` hears every key pressed on the page while
+  `subscriptions` returns it.
 - **Controlled inputs.** `value` and `checked` always show the model: after typing, the field
   gets the model's value back if the update did not take the input.
 - **Pacing.** A message sent by a click or a key is drawn at the next microtask; messages sent by

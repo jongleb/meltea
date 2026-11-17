@@ -7,47 +7,57 @@ external keyboard_event : string -> < key : string ; bubbles : bool ; cancelable
   = "KeyboardEvent"
 [@@mel.new]
 
+external drag_event : string -> < bubbles : bool ; cancelable : bool > Js.t -> Dom.event = "Event"
+[@@mel.new]
+
 external dispatched : Dom.element -> Dom.event -> bool = "dispatchEvent" [@@mel.send]
 
 (** What the browser may still do after an event: its default action, or nothing. *)
 type outcome = Default_kept | Default_prevented
 
-type model = { kept : int; prevented : int; keys : string }
+type model = { kept : int; prevented : int; keys : string; heard : string }
 
-type message = Keep | Prevent | Press of string
+type message = Keep | Prevent | Press of string | Hear of string
 
 let update message model =
   match message with
   | Keep -> { model with kept = model.kept + 1 }
   | Prevent -> { model with prevented = model.prevented + 1 }
   | Press key -> { model with keys = model.keys ^ key }
+  | Hear name -> { model with heard = model.heard ^ name }
 
-let view { kept; prevented; keys } =
+let view { kept; prevented; keys; heard } =
   <div>
     <a id="kept" href="#kept" onClick=Keep>(Html.int kept)</a>
     <a id="prevented" href="#prevented" onClick=(Html.prevent Prevent)>(Html.int prevented)</a>
+    <a id="nowhere" href="#" onClick=(Hear "n")>(Html.text "nowhere")</a>
     <input id="keys" onKeyDown=(Html.prevent (fun key -> Press key)) />
     <span id="typed">(Html.text keys)</span>
+    <div id="target" onDrop=(Hear "d")>(Html.text heard)</div>
+    <div id="entered" onDrop=(Hear "e") onDragEnter=(Hear "x")>(Html.text "entered")</div>
+    <div id="dragged" onDragOver=(Hear "o")>(Html.text "dragged")</div>
   </div>
 
 let () =
   describe "Handlers that prevent the default action" (fun () ->
       test
-        "a handler given as Html.prevent cancels its event and still sends its message, and any other handler leaves the default action, after any events"
+        "a handler given as Html.prevent, a click on a link to #, and drop, dragenter and dragover on an element that takes drops cancel their event and send the message they are given; any other handler leaves the default action, after any events"
         (fun () ->
           check
             (property (tapes ~shortest:1 ~longest:30) (fun values ->
                  let tape = tape values in
                  let root = attached () in
-                 let program = Program.sandbox ~init:{ kept = 0; prevented = 0; keys = "" } ~update ~view root in
-                 let sent = ref { kept = 0; prevented = 0; keys = "" } in
+                 let init = { kept = 0; prevented = 0; keys = ""; heard = "" } in
+                 let program = Program.sandbox ~init ~update ~view root in
+                 let sent = ref init in
                  let outcome element event =
                    match dispatched element event with true -> Default_kept | false -> Default_prevented
                  in
+                 let drag at name = outcome (select root at) (drag_event name [%mel.obj { bubbles = true; cancelable = true }]) in
                  List.iter
                    (fun _ ->
                      let expected, happened =
-                       match draw tape 3 with
+                       match draw tape 10 with
                        | 0 ->
                            sent := update Keep !sent;
                            ( Default_kept,
@@ -57,6 +67,22 @@ let () =
                            ( Default_prevented,
                              outcome (select root "#prevented")
                                (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]) )
+                       | 2 ->
+                           sent := update (Hear "n") !sent;
+                           ( Default_prevented,
+                             outcome (select root "#nowhere") (mouse_event "click" [%mel.obj { bubbles = true; cancelable = true }]) )
+                       | 3 -> (Default_prevented, drag "#target" "dragover")
+                       | 4 -> (Default_prevented, drag "#target" "dragenter")
+                       | 5 ->
+                           sent := update (Hear "d") !sent;
+                           (Default_prevented, drag "#target" "drop")
+                       | 6 ->
+                           sent := update (Hear "x") !sent;
+                           (Default_prevented, drag "#entered" "dragenter")
+                       | 7 -> (Default_prevented, drag "#entered" "dragover")
+                       | 8 ->
+                           sent := update (Hear "o") !sent;
+                           (Default_kept, drag "#dragged" "dragover")
                        | _ ->
                            let key = match draw tape 2 with 0 -> "a" | _ -> "b" in
                            sent := update (Press key) !sent;
@@ -69,8 +95,9 @@ let () =
                      expect
                        ( text_content (select root "#kept"),
                          text_content (select root "#prevented"),
-                         text_content (select root "#typed") )
-                     |. to_equal (string_of_int !sent.kept, string_of_int !sent.prevented, !sent.keys))
+                         text_content (select root "#typed"),
+                         text_content (select root "#target") )
+                     |. to_equal (string_of_int !sent.kept, string_of_int !sent.prevented, !sent.keys, !sent.heard))
                    (List.init (Array.length values) Fun.id);
                  Program.stop program))
             [%mel.obj { numRuns = 100 }]))

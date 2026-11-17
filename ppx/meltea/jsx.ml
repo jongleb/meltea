@@ -51,6 +51,8 @@ let mapper =
               | _ -> [%expr __melhole_dispatch [%e message]]
             in
             match (requirement, value.pexp_desc) with
+            | `Required, Pexp_ident { txt = Lident "__melhole_cancelled"; _ } ->
+                [%expr fun __melhole_event -> Html.prevent_default __melhole_event]
             | ( `Required,
                 Pexp_apply
                   ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ }; _ }, [ (Nolabel, message) ]) ) ->
@@ -419,6 +421,50 @@ let mapper =
   end
 
 let structure items =
+  let implied =
+    object
+      inherit Ast_traverse.map as super
+
+      method! expression expression =
+        let expression = super#expression expression in
+        let loc = expression.pexp_loc in
+        match (Element.without_jsx expression.pexp_attributes, expression.pexp_desc) with
+        | Some _, Pexp_apply (({ pexp_desc = Pexp_ident { txt = Lident tag; _ }; _ } as callee), arguments) ->
+            let given label = List.assoc_opt (Labelled label) arguments in
+            let prevented value =
+              match value.pexp_desc with
+              | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Ldot (Lident "Html", "prevent"); _ }; _ }, _)
+              | Pexp_ident { txt = Lident "__melhole_cancelled"; _ } ->
+                  value
+              | _ -> { value with pexp_desc = Pexp_apply ([%expr Html.prevent], [ (Nolabel, value) ]) }
+            in
+            let nowhere =
+              match (tag, Option.map (fun href -> href.pexp_desc) (given "href")) with
+              | "a", Some (Pexp_constant (Pconst_string ("#", _, _))) -> [ "onClick" ]
+              | _ -> []
+            in
+            let dropped = Option.fold ~none:[] ~some:(fun _ -> [ "onDrop"; "onDragEnter"; "onDragOver" ]) (given "onDrop") in
+            {
+              expression with
+              pexp_desc =
+                Pexp_apply
+                  ( callee,
+                    List.map
+                      (fun (label, value) ->
+                        match label with
+                        | Labelled name when List.mem name (nowhere @ dropped) -> (label, prevented value)
+                        | _ -> (label, value))
+                      arguments
+                    @ List.filter_map
+                        (fun name ->
+                          Option.fold
+                            ~none:(Some (Labelled name, [%expr __melhole_cancelled]))
+                            ~some:(fun _ -> None) (given name))
+                        dropped );
+            }
+        | _ -> expression
+    end
+  in
   let own =
     object
       inherit Ast_traverse.map as super
@@ -471,7 +517,7 @@ let structure items =
         | _ -> expression
     end
   in
-  own#structure (mapper#structure (Dead.annotate (Splice.structure items)))
+  own#structure (mapper#structure (implied#structure (Dead.annotate (Splice.structure items))))
 let () =
   Driver.add_arg "-hydratable"
     (Arg.Unit (fun () -> Element.output := Element.Hydratable))

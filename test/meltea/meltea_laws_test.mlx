@@ -130,8 +130,8 @@ let guarded_view model =
     <i>(Html.text model.draft)</i>
   </section>
 
-(** What a law subscribes to: the hash, tagged, or a timer too slow to fire. *)
-type listener = Hash_listener of int | Timer of int
+(** What a law subscribes to: the hash or the keys, tagged, or a timer too slow to fire. *)
+type listener = Hash_listener of int | Key_listener of int | Timer of int
 
 (** A program that only listens. *)
 type heard = Set of listener list | Heard of int * string
@@ -139,6 +139,9 @@ type heard = Set of listener list | Heard of int * string
 let go_to : string -> unit =
   [%mel.raw
     {|function (hash) { history.replaceState(null, "", hash); window.dispatchEvent(new Event("hashchange")); }|}]
+
+let press : string -> unit =
+  [%mel.raw {|function (key) { document.body.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); }|}]
 
 (** A list whose rows read two values from outside the row. *)
 type marked = { rows : item list; chosen : int option; suffix : string }
@@ -561,7 +564,7 @@ let () =
              restore removes;
              expect (List.map fst seen, left) |. to_equal (List.map snd seen, 0)))
         [%mel.obj { numRuns = 150 }]);
-    test "after any change of subscriptions, a hash change sends exactly the current ones' messages"
+    test "after any change of subscriptions, a hash change and a key press send exactly the current ones' messages"
       (fun () ->
         check
           (property (tapes ~shortest:4 ~longest:60) (fun values ->
@@ -582,6 +585,7 @@ let () =
                           (fun listener ->
                             match listener with
                             | Hash_listener tag -> Sub.hash (fun hash -> Heard (tag, hash))
+                            | Key_listener tag -> Sub.key_down (fun key -> Heard (tag, key))
                             | Timer interval -> Sub.every (100000 + interval) (fun _ -> Heard (-1, "")))
                           listeners))
                    (create_element document "div")
@@ -590,21 +594,25 @@ let () =
                  List.init (1 + draw tape 6) (fun round ->
                      let listeners =
                        List.init (draw tape 5) (fun _ ->
-                           match draw tape 3 with
+                           match draw tape 4 with
                            | 0 -> Timer (draw tape 2)
+                           | 1 -> Key_listener (draw tape 4)
                            | _ -> Hash_listener (draw tape 4))
                      in
                      Program.dispatch program (Set listeners);
                      Program.flush program;
                      heard := [];
                      let hash = "#/" ^ string_of_int round in
+                     let key = "k" ^ string_of_int round in
                      go_to hash;
+                     press key;
                      ( List.sort compare !heard,
                        List.sort compare
                          (List.filter_map
                             (fun listener ->
                               match listener with
                               | Hash_listener tag -> Some (tag, hash)
+                              | Key_listener tag -> Some (tag, key)
                               | Timer _ -> None)
                             listeners) ))
                in
@@ -612,6 +620,7 @@ let () =
                Program.stop program;
                heard := [];
                go_to "#/stopped";
+               press "stopped";
                expect (List.map fst rounds, !heard) |. to_equal (List.map snd rounds, [])))
           [%mel.obj { numRuns = 300 }]);
     test "a hole is evaluated once on mount and again exactly when a local it reads changes" (fun () ->
