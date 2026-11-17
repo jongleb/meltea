@@ -119,6 +119,19 @@ val rows :
   'item selectors ->
   child
 
+(** A loop over a source that is the same value at every draw: [rows] without keys, scans or moves. *)
+val fixed :
+  'source ->
+  ('source -> 'item array) ->
+  'frame template ->
+  ('frame -> Dom.element[@u]) ->
+  ('frame -> 'item -> unit[@u]) ->
+  ('item -> int -> input array -> int -> unit[@u]) ->
+  int ->
+  input array ->
+  'item selectors ->
+  child
+
 val memo : input array -> (unit -> child) -> child
 
 (** Whether a value differs from the one a scope remembers for it. *)

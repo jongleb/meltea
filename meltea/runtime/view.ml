@@ -1971,3 +1971,78 @@ let chunks ~size ~row_height ~tag child =
           chunked.groups <- groups;
           current)
         (hosted (Lazy.force chunking) current))
+
+let fixed (type frame source item) (source : source) (listed : source -> item array) (template : frame template)
+    (root : (frame -> Dom.element)[@u]) (refresh : (frame -> item -> unit)[@u]) project pieces outer selectors =
+  let root_of frame = Melhole.Dom_api.to_node (root frame [@u]) in
+  let shown items projections frames indexes =
+    Rows_state
+      {
+        template;
+        root;
+        source = Input source;
+        items;
+        keys = Melhole.Reconcile.string_keys no_keys;
+        outer;
+        projections;
+        frames;
+        selectors;
+        indexes;
+      }
+  in
+  {
+    shape = Single;
+    build =
+      (fun [@u] position ->
+        let items = listed source in
+        let projections = (match Array.length items * pieces with 0 -> no_inputs | size -> Array.make size unset) in
+        let frames =
+          !medium.built (Array.length items) position
+            (fun [@u] index (at : Melhole.Template.position) ->
+              let item = Array.unsafe_get items index in
+              project item index projections (index * pieces) [@u];
+              let made, frame =
+                match !medium.adoption with
+                | Fresh_nodes ->
+                    let made = !medium.root at template.markup [@u] in
+                    let frame = template.make (Melhole.Dom_api.to_node made) [@u] in
+                    refresh frame item [@u];
+                    (made, frame)
+                | Server_nodes -> !medium.adopt template (fun [@u] frame -> refresh frame item [@u]) at [@u]
+              in
+              placed at made template frame;
+              frame)
+            (fun [@u] frame _ -> Melhole.Dom_api.following_sibling (root_of frame)) [@u]
+        in
+        shown items projections frames Unindexed);
+    patch =
+      (fun [@u] _ live ->
+        match live with
+        | Rows_state old -> (
+            let (Input before) = old.source in
+            match (Melhole.Dom_api.same before source, Melhole.Witness.equal old.template.witness template.witness) with
+            | true, Some Equal -> (
+                match compare_inputs old.outer outer with
+                | Unchanged -> Some live
+                | Changed ->
+                    let items : item array = reused old.items in
+                    let scratch = Array.make pieces unset in
+                    let redraw index =
+                      let item = Array.unsafe_get items index and at = index * pieces in
+                      project item index scratch 0 [@u];
+                      match piece_change old.projections at scratch pieces with
+                      | Unchanged -> ()
+                      | Changed ->
+                          pieces_copied scratch 0 old.projections at pieces;
+                          refresh (Array.unsafe_get old.frames index) item [@u]
+                    in
+                    match reselected old.items old.selectors old.indexes old.outer items selectors outer redraw with
+                    | Some indexes -> Some (shown items old.projections old.frames indexes)
+                    | None ->
+                        for index = 0 to Array.length items - 1 do
+                          redraw index
+                        done;
+                        Some (shown items old.projections old.frames Unindexed))
+            | true, None | false, _ -> None)
+        | _ -> None);
+  }
